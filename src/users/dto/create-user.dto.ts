@@ -1,5 +1,7 @@
 export class CreateUserDto {
-  email: string;
-
-  name: string;
+  constructor(
+    public email: string,
+    public firstName: string,
+    public lastName?: string,
+  ) {}
 }
