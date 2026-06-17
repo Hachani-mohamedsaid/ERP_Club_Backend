@@ -29,7 +29,7 @@ This project now exposes:
 
 - an HTTP API on `PORT`
 - a TCP microservice on `MICROSERVICE_PORT`
-- Prisma with a SQLite datasource for local development
+- Prisma with a PostgreSQL datasource configured through `DATABASE_URL`
 
 ## Project setup
 
