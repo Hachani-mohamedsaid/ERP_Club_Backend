@@ -31,6 +31,12 @@ This project now exposes:
 - a TCP microservice on `MICROSERVICE_PORT`
 - Prisma with a PostgreSQL datasource configured through `DATABASE_URL`
 
+### Render database URLs
+
+- Use the Render external database URL for local development on your machine.
+- Use the Render internal database URL when deploying the NestJS app inside Render.
+- To open an interactive SQL session from your terminal, use the Render CLI command shown in the database dashboard (`render psql <service-id>`).
+
 ## Project setup
 
 ```bash
