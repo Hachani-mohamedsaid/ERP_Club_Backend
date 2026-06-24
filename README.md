@@ -29,7 +29,16 @@ This project now exposes:
 
 - an HTTP API on `PORT`
 - a TCP microservice on `MICROSERVICE_PORT`
-- Prisma with a SQLite datasource for local development
+- Prisma with a PostgreSQL datasource configured through `DATABASE_URL`
+
+### Render (production)
+
+Voir **`docs/RENDER.md`** — PostgreSQL + Web Service NestJS.
+
+- **Local** → External `DATABASE_URL` + `?sslmode=require`
+- **Render** → Internal `DATABASE_URL` (dashboard)
+- **Build** : `npm run render:build`
+- **Start** : `npm run render:start`
 
 ## Project setup
 
