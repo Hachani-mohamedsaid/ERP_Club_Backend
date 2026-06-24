@@ -1,13 +1,19 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import type { JwtPayload } from '../auth/jwt-payload.interface';
 import { PrismaService } from '../prisma/prisma.service';
-import { buildDefaultDashboardSeed } from './dashboard-seed';
+import { ClubService } from '../club/club.service';
 
 @Injectable()
 export class OrganizationsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly club: ClubService,
+  ) {}
 
-  async getDashboard(organizationId: string, email: string) {
+  async getDashboard(organizationId: string, user: JwtPayload) {
+    if (user.organizationId !== organizationId) {
+      throw new ForbiddenException('Accès refusé à cette organisation.');
+    }
     const org = await this.prisma.organization.findUnique({
       where: { id: organizationId },
       include: {
@@ -20,41 +26,28 @@ export class OrganizationsService {
       throw new NotFoundException('Organisation introuvable.');
     }
 
-    if (org.owner.email !== email.trim().toLowerCase()) {
-      throw new ForbiddenException('Accès refusé à cette organisation.');
-    }
+    await this.club.syncDashboardStats(organizationId);
 
-    let stats = org.dashboardStats;
-    if (!stats) {
-      const seed = buildDefaultDashboardSeed(org.clubName);
-      stats = await this.prisma.clubDashboardStats.create({
-        data: {
-          organizationId: org.id,
-          playersCount: seed.playersCount,
-          staffCount: seed.staffCount,
-          budgetRemaining: seed.budgetRemaining,
-          payrollTotal: seed.payrollTotal,
-          injuredCount: seed.injuredCount,
-          contractsToRenew: seed.contractsToRenew,
-          budgetUsedPct: seed.budgetUsedPct,
-          budgetChart: seed.budgetChart as unknown as Prisma.InputJsonValue,
-          alerts: seed.alerts as unknown as Prisma.InputJsonValue,
-          aiSummary: seed.aiSummary as unknown as Prisma.InputJsonValue,
-        },
-      });
+    const orgRefreshed = await this.prisma.organization.findUnique({
+      where: { id: organizationId },
+      include: { owner: true, dashboardStats: true },
+    });
+    if (!orgRefreshed?.dashboardStats) {
+      throw new NotFoundException('Statistiques introuvables.');
     }
+    const stats = orgRefreshed.dashboardStats;
 
     return {
       organization: {
-        id: org.id,
-        clubName: org.clubName,
-        country: org.country,
-        league: org.league,
-        logoUrl: org.logoUrl,
+        id: orgRefreshed.id,
+        clubName: orgRefreshed.clubName,
+        country: orgRefreshed.country,
+        league: orgRefreshed.league,
+        logoUrl: orgRefreshed.logoUrl,
       },
       owner: {
-        fullName: org.owner.fullName,
-        email: org.owner.email,
+        fullName: orgRefreshed.owner.fullName,
+        email: orgRefreshed.owner.email,
       },
       season: String(new Date().getFullYear()),
       kpis: [

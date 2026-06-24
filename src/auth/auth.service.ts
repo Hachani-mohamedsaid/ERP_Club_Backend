@@ -5,13 +5,17 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import { AuditActionType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ImgbbService } from '../imgbb/imgbb.service';
 import { RegisterOrganizationDto } from './dto/register-organization.dto';
 import { LoginDto } from './dto/login.dto';
-import { Prisma } from '@prisma/client';
 import { buildDefaultDashboardSeed } from '../organizations/dashboard-seed';
+import { seedClubOps } from '../club/ops-seed';
+import { ClubAuditService } from '../club/club-audit.service';
+import { JwtPayload } from './jwt-payload.interface';
 
 @Injectable()
 export class AuthService {
@@ -19,6 +23,8 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly imgbb: ImgbbService,
     private readonly config: ConfigService,
+    private readonly jwt: JwtService,
+    private readonly audit: ClubAuditService,
   ) {}
 
   async registerOrganization(
@@ -93,6 +99,16 @@ export class AuthService {
         },
       });
 
+      await seedClubOps(tx, {
+        organizationId: organization.id,
+        clubName: organization.clubName,
+        country: organization.country,
+        ownerFullName: user.fullName,
+        ownerEmail: user.email,
+        ownerPhone: user.phone,
+        officialEmail: user.email,
+      });
+
       if (dto.invitationCode?.trim()) {
         await tx.invitationCode.updateMany({
           where: { code: dto.invitationCode.trim(), isActive: true },
@@ -121,7 +137,7 @@ export class AuthService {
     };
   }
 
-  async login(dto: LoginDto) {
+  async login(dto: LoginDto, ip?: string) {
     const user = await this.prisma.user.findUnique({
       where: { email: dto.email },
       include: { organization: true },
@@ -140,8 +156,35 @@ export class AuthService {
       throw new UnauthorizedException('Email ou mot de passe incorrect.');
     }
 
+    const payload: JwtPayload = {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+      organizationId: user.organization?.id ?? null,
+      fullName: user.fullName,
+    };
+
+    const accessToken = await this.jwt.signAsync(payload);
+
+    if (user.organization) {
+      await this.audit.log(user.organization.id, {
+        userName: user.fullName,
+        userRole: 'Club Admin',
+        action: 'Connexion',
+        entity: '—',
+        details: 'Connexion réussie',
+        type: AuditActionType.CONNEXION,
+        ipAddress: ip,
+      });
+      await this.prisma.clubMember.updateMany({
+        where: { organizationId: user.organization.id, email: user.email },
+        data: { lastLoginAt: new Date() },
+      });
+    }
+
     return {
       message: 'Connexion réussie',
+      accessToken,
       user: {
         id: user.id,
         email: user.email,
@@ -158,6 +201,10 @@ export class AuthService {
           }
         : null,
     };
+  }
+
+  signToken(payload: JwtPayload) {
+    return this.jwt.signAsync(payload);
   }
 
   private async validateInvitationCode(code?: string) {
