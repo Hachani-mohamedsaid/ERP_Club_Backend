@@ -13,8 +13,8 @@ export class UsersController {
   }
 
   @Post()
-  create(@Body() createUserDto: CreateUserDto) {
-    return this.usersService.create(createUserDto);
+  create(@Body() _createUserDto: CreateUserDto) {
+    return this.usersService.create();
   }
 
   @MessagePattern('users.find-all')
@@ -23,7 +23,7 @@ export class UsersController {
   }
 
   @MessagePattern('users.create')
-  createMessage(@Payload() createUserDto: CreateUserDto) {
-    return this.usersService.create(createUserDto);
+  createMessage(@Payload() _createUserDto: CreateUserDto) {
+    return this.usersService.create();
   }
 }

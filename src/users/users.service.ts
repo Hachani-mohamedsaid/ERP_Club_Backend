@@ -8,15 +8,31 @@ export class UsersService {
 
   findAll() {
     return this.prisma.user.findMany({
-      orderBy: {
-        createdAt: 'desc',
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        phone: true,
+        role: true,
+        isActive: true,
+        createdAt: true,
+        organization: {
+          select: {
+            id: true,
+            clubName: true,
+            country: true,
+            league: true,
+            logoUrl: true,
+          },
+        },
       },
+      orderBy: { createdAt: 'desc' },
     });
   }
 
-  create(createUserDto: CreateUserDto) {
-    return this.prisma.user.create({
-      data: createUserDto,
-    });
+  create() {
+    throw new Error(
+      'Utilisez POST /auth/register pour créer une organisation.',
+    );
   }
 }
