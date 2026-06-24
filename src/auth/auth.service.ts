@@ -10,6 +10,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ImgbbService } from '../imgbb/imgbb.service';
 import { RegisterOrganizationDto } from './dto/register-organization.dto';
 import { LoginDto } from './dto/login.dto';
+import { Prisma } from '@prisma/client';
+import { buildDefaultDashboardSeed } from '../organizations/dashboard-seed';
 
 @Injectable()
 export class AuthService {
@@ -71,6 +73,23 @@ export class AuthService {
           logoUrl,
           invitationCode: dto.invitationCode?.trim() || null,
           ownerId: user.id,
+        },
+      });
+
+      const seed = buildDefaultDashboardSeed(organization.clubName);
+      await tx.clubDashboardStats.create({
+        data: {
+          organizationId: organization.id,
+          playersCount: seed.playersCount,
+          staffCount: seed.staffCount,
+          budgetRemaining: seed.budgetRemaining,
+          payrollTotal: seed.payrollTotal,
+          injuredCount: seed.injuredCount,
+          contractsToRenew: seed.contractsToRenew,
+          budgetUsedPct: seed.budgetUsedPct,
+          budgetChart: seed.budgetChart as unknown as Prisma.InputJsonValue,
+          alerts: seed.alerts as unknown as Prisma.InputJsonValue,
+          aiSummary: seed.aiSummary as unknown as Prisma.InputJsonValue,
         },
       });
 
