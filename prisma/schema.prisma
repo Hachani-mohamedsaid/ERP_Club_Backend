@@ -75,18 +75,21 @@ enum CalendarEventType {
 }
 
 model User {
-  id            String        @id @default(uuid())
-  email         String        @unique
-  passwordHash  String
-  fullName      String
-  phone         String
-  role          UserRole      @default(ADMIN_CLUB)
-  acceptTerms   Boolean       @default(false)
-  acceptPrivacy Boolean       @default(false)
-  isActive      Boolean       @default(true)
-  organization  Organization?
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  id                 String          @id @default(uuid())
+  email              String          @unique
+  passwordHash       String
+  fullName           String
+  phone              String
+  role               UserRole        @default(ADMIN_CLUB)
+  clubMemberRole     ClubMemberRole?
+  organizationId     String?
+  memberOrganization Organization?   @relation("OrganizationMembers", fields: [organizationId], references: [id], onDelete: Cascade)
+  acceptTerms        Boolean         @default(false)
+  acceptPrivacy      Boolean         @default(false)
+  isActive           Boolean         @default(true)
+  ownedOrganization  Organization?   @relation("OrganizationOwner")
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
 }
 
 model Organization {
@@ -97,7 +100,8 @@ model Organization {
   logoUrl         String?
   invitationCode  String?
   ownerId         String               @unique
-  owner           User                 @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  owner           User                 @relation("OrganizationOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  authUsers       User[]               @relation("OrganizationMembers")
   dashboardStats  ClubDashboardStats?
   profile         OrganizationProfile?
   members         ClubMember[]

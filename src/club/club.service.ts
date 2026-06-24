@@ -1,8 +1,11 @@
 import {
+  BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import * as bcrypt from 'bcrypt';
 import {
   AuditActionType,
   ClubMemberRole,
@@ -103,25 +106,63 @@ export class ClubService {
 
   async createMember(
     user: JwtPayload,
-    data: { fullName: string; email: string; clubRole: string; status?: string },
+    data: { fullName: string; email: string; clubRole: string; password?: string; status?: string },
     ip?: string,
   ) {
     const organizationId = this.orgId(user);
-    const member = await this.prisma.clubMember.create({
-      data: {
-        organizationId,
-        fullName: data.fullName.trim(),
-        email: data.email.trim().toLowerCase(),
-        clubRole: labelToClubRole(data.clubRole),
-        status: data.status ? this.labelToMemberStatus(data.status) : 'ACTIF',
-      },
+    const email = data.email.trim().toLowerCase();
+    const password = data.password?.trim();
+
+    if (!password || password.length < 8) {
+      throw new BadRequestException('Mot de passe temporaire requis (8 caractères minimum).');
+    }
+
+    const existingUser = await this.prisma.user.findUnique({ where: { email } });
+    if (existingUser) {
+      throw new ConflictException('Un compte existe déjà avec cet email.');
+    }
+
+    const clubRole = labelToClubRole(data.clubRole);
+    if (clubRole === 'CLUB_ADMIN') {
+      throw new BadRequestException('Impossible de créer un second administrateur principal.');
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    const status = data.status ? this.labelToMemberStatus(data.status) : 'ACTIF';
+
+    const member = await this.prisma.$transaction(async (tx) => {
+      await tx.user.create({
+        data: {
+          email,
+          passwordHash,
+          fullName: data.fullName.trim(),
+          phone: '',
+          role: 'ADMIN_CLUB',
+          organizationId,
+          clubMemberRole: clubRole,
+          isActive: status === 'ACTIF',
+          acceptTerms: true,
+          acceptPrivacy: true,
+        },
+      });
+
+      return tx.clubMember.create({
+        data: {
+          organizationId,
+          fullName: data.fullName.trim(),
+          email,
+          clubRole,
+          status,
+        },
+      });
     });
+
     await this.audit.log(organizationId, {
       userName: user.fullName,
       userRole: 'Club Admin',
       action: 'Ajout utilisateur',
       entity: member.fullName,
-      details: `Rôle: ${data.clubRole}`,
+      details: `Rôle: ${data.clubRole} — compte de connexion créé`,
       type: AuditActionType.CREATION,
       ipAddress: ip,
     });
@@ -139,14 +180,37 @@ export class ClubService {
       where: { id, organizationId },
     });
     if (!existing) throw new NotFoundException('Utilisateur introuvable.');
-    const member = await this.prisma.clubMember.update({
-      where: { id },
-      data: {
-        ...(data.fullName && { fullName: data.fullName.trim() }),
-        ...(data.email && { email: data.email.trim().toLowerCase() }),
-        ...(data.clubRole && { clubRole: labelToClubRole(data.clubRole) }),
-        ...(data.status && { status: this.labelToMemberStatus(data.status) }),
-      },
+    const nextEmail = data.email?.trim().toLowerCase();
+    const nextRole = data.clubRole ? labelToClubRole(data.clubRole) : undefined;
+    const nextStatus = data.status ? this.labelToMemberStatus(data.status) : undefined;
+
+    const member = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.clubMember.update({
+        where: { id },
+        data: {
+          ...(data.fullName && { fullName: data.fullName.trim() }),
+          ...(nextEmail && { email: nextEmail }),
+          ...(nextRole && { clubRole: nextRole }),
+          ...(nextStatus && { status: nextStatus }),
+        },
+      });
+
+      const authUser = await tx.user.findFirst({
+        where: { email: existing.email, organizationId },
+      });
+      if (authUser) {
+        await tx.user.update({
+          where: { id: authUser.id },
+          data: {
+            ...(data.fullName && { fullName: data.fullName.trim() }),
+            ...(nextEmail && { email: nextEmail }),
+            ...(nextRole && { clubMemberRole: nextRole }),
+            ...(nextStatus && { isActive: nextStatus === 'ACTIF' }),
+          },
+        });
+      }
+
+      return updated;
     });
     await this.audit.log(organizationId, {
       userName: user.fullName,
@@ -169,7 +233,15 @@ export class ClubService {
     if (existing.clubRole === 'CLUB_ADMIN') {
       throw new ForbiddenException('Impossible de supprimer l\'administrateur principal.');
     }
-    await this.prisma.clubMember.delete({ where: { id } });
+    await this.prisma.$transaction(async (tx) => {
+      await tx.clubMember.delete({ where: { id } });
+      const authUser = await tx.user.findFirst({
+        where: { email: existing.email, organizationId },
+      });
+      if (authUser) {
+        await tx.user.delete({ where: { id: authUser.id } });
+      }
+    });
     await this.audit.log(organizationId, {
       userName: user.fullName,
       userRole: 'Club Admin',

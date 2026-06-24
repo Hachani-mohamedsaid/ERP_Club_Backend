@@ -16,6 +16,8 @@ import { buildDefaultDashboardSeed } from '../organizations/dashboard-seed';
 import { seedClubOps } from '../club/ops-seed';
 import { ClubAuditService } from '../club/club-audit.service';
 import { JwtPayload } from './jwt-payload.interface';
+import { ClubMemberRole } from '@prisma/client';
+import { clubRoleToLabel } from '../club/permissions-seed';
 
 @Injectable()
 export class AuthService {
@@ -140,7 +142,7 @@ export class AuthService {
   async login(dto: LoginDto, ip?: string) {
     const user = await this.prisma.user.findUnique({
       where: { email: dto.email },
-      include: { organization: true },
+      include: { ownedOrganization: true, memberOrganization: true },
     });
 
     if (!user) {
@@ -156,20 +158,25 @@ export class AuthService {
       throw new UnauthorizedException('Email ou mot de passe incorrect.');
     }
 
+    const org = user.ownedOrganization ?? user.memberOrganization;
+    const clubMemberRole = await this.resolveClubMemberRole(user.id, user.email, org?.id ?? null, user.clubMemberRole);
+    const clubMemberRoleLabel = clubRoleToLabel(clubMemberRole);
+
     const payload: JwtPayload = {
       sub: user.id,
       email: user.email,
       role: user.role,
-      organizationId: user.organization?.id ?? null,
+      organizationId: org?.id ?? null,
       fullName: user.fullName,
+      clubMemberRole,
     };
 
     const accessToken = await this.jwt.signAsync(payload);
 
-    if (user.organization) {
-      await this.audit.log(user.organization.id, {
+    if (org) {
+      await this.audit.log(org.id, {
         userName: user.fullName,
-        userRole: 'Club Admin',
+        userRole: clubMemberRoleLabel,
         action: 'Connexion',
         entity: '—',
         details: 'Connexion réussie',
@@ -177,7 +184,7 @@ export class AuthService {
         ipAddress: ip,
       });
       await this.prisma.clubMember.updateMany({
-        where: { organizationId: user.organization.id, email: user.email },
+        where: { organizationId: org.id, email: user.email },
         data: { lastLoginAt: new Date() },
       });
     }
@@ -190,17 +197,38 @@ export class AuthService {
         email: user.email,
         fullName: user.fullName,
         role: user.role,
+        clubMemberRole: clubMemberRoleLabel,
       },
-      organization: user.organization
+      organization: org
         ? {
-            id: user.organization.id,
-            clubName: user.organization.clubName,
-            country: user.organization.country,
-            league: user.organization.league,
-            logoUrl: user.organization.logoUrl,
+            id: org.id,
+            clubName: org.clubName,
+            country: org.country,
+            league: org.league,
+            logoUrl: org.logoUrl,
           }
         : null,
     };
+  }
+
+  private async resolveClubMemberRole(
+    userId: string,
+    email: string,
+    organizationId: string | null,
+    storedRole: ClubMemberRole | null,
+  ): Promise<ClubMemberRole> {
+    if (storedRole) return storedRole;
+    if (!organizationId) return 'CLUB_ADMIN';
+
+    const member = await this.prisma.clubMember.findFirst({
+      where: { organizationId, email },
+    });
+    if (member) return member.clubRole;
+
+    const owner = await this.prisma.organization.findFirst({
+      where: { ownerId: userId },
+    });
+    return owner ? 'CLUB_ADMIN' : 'CLUB_ADMIN';
   }
 
   signToken(payload: JwtPayload) {

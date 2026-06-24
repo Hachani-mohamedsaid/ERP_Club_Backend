@@ -5,6 +5,7 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { ClubMemberRole } from '@prisma/client';
 import { JwtPayload } from '../../auth/jwt-payload.interface';
 import { ClubService } from '../club.service';
 import { PERMISSION_KEY } from '../decorators/require-permission.decorator';
@@ -28,13 +29,18 @@ export class PermissionsGuard implements CanActivate {
     if (!user?.organizationId) {
       throw new ForbiddenException('Organisation requise.');
     }
-    if (user.role === 'ADMIN_CLUB' || user.role === 'SUPER_ADMIN') {
+    if (user.role === 'SUPER_ADMIN') {
+      return true;
+    }
+
+    const clubRole = (user.clubMemberRole as ClubMemberRole | undefined) ?? 'CLUB_ADMIN';
+    if (clubRole === 'CLUB_ADMIN') {
       return true;
     }
 
     const allowed = await this.club.checkPermission(
       user.organizationId,
-      'CLUB_ADMIN',
+      clubRole,
       meta.module,
       meta.action,
     );

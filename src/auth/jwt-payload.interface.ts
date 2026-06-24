@@ -4,4 +4,5 @@ export interface JwtPayload {
   role: string;
   organizationId: string | null;
   fullName: string;
+  clubMemberRole?: string;
 }

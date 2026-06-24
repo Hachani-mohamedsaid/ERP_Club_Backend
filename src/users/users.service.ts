@@ -16,7 +16,16 @@ export class UsersService {
         role: true,
         isActive: true,
         createdAt: true,
-        organization: {
+        ownedOrganization: {
+          select: {
+            id: true,
+            clubName: true,
+            country: true,
+            league: true,
+            logoUrl: true,
+          },
+        },
+        memberOrganization: {
           select: {
             id: true,
             clubName: true,
