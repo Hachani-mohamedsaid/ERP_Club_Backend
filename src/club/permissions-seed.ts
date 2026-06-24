@@ -21,6 +21,7 @@ function perm(r = false, c = false, u = false, d = false): Perm {
 
 const LABEL_TO_ROLE: Record<string, ClubMemberRole> = {
   'Club Admin': 'CLUB_ADMIN',
+  'Admin Club': 'CLUB_ADMIN',
   Responsable: 'RESPONSABLE',
   'Préparateur Physique': 'PREPARATEUR',
   'Analyste Performance': 'ANALYSTE',
