@@ -10,27 +10,15 @@ export interface ClubAlert {
 }
 
 export function buildDefaultBudgetChart(): BudgetChartPoint[] {
-  return [
-    { month: 'Jan', budget: 420, spent: 0 },
-    { month: 'Fév', budget: 420, spent: 0 },
-    { month: 'Mar', budget: 420, spent: 0 },
-    { month: 'Avr', budget: 420, spent: 0 },
-    { month: 'Mai', budget: 420, spent: 0 },
-    { month: 'Juin', budget: 420, spent: 0 },
-    { month: 'Juil', budget: 420, spent: 0 },
-    { month: 'Août', budget: 420, spent: 0 },
-    { month: 'Sep', budget: 420, spent: 0 },
-    { month: 'Oct', budget: 420, spent: 0 },
-    { month: 'Nov', budget: 420, spent: 0 },
-    { month: 'Déc', budget: 420, spent: 0 },
-  ];
+  const months = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'];
+  return months.map((month) => ({ month, budget: 0, spent: 0 }));
 }
 
 export function buildDefaultDashboardSeed(clubName: string) {
   return {
     playersCount: 0,
-    staffCount: 1,
-    budgetRemaining: 500000,
+    staffCount: 0,
+    budgetRemaining: 0,
     payrollTotal: 0,
     injuredCount: 0,
     contractsToRenew: 0,
@@ -39,13 +27,13 @@ export function buildDefaultDashboardSeed(clubName: string) {
     alerts: [
       {
         type: 'warning' as const,
-        text: `Bienvenue sur ODIN ERP — ${clubName} est prêt. Ajoutez vos joueurs et staff.`,
+        text: `Bienvenue ${clubName} — commencez par ajouter vos joueurs et votre staff.`,
       },
     ],
     aiSummary: [
-      `${clubName} vient d'être créé sur la plateforme.`,
-      'Commencez par inviter votre staff technique.',
-      'Le budget club est disponible à 100%.',
+      'Aucun joueur enregistré pour le moment.',
+      'Aucun membre du staff ajouté.',
+      'Budget non configuré — définissez-le dans Finances.',
     ],
   };
 }
