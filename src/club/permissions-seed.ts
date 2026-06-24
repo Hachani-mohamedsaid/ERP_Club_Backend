@@ -19,23 +19,32 @@ function perm(r = false, c = false, u = false, d = false): Perm {
   return { canRead: r, canCreate: c, canUpdate: u, canDelete: d };
 }
 
-const ROLE_MAP: Record<string, ClubMemberRole> = {
+const LABEL_TO_ROLE: Record<string, ClubMemberRole> = {
   'Club Admin': 'CLUB_ADMIN',
+  Responsable: 'RESPONSABLE',
+  'Préparateur Physique': 'PREPARATEUR',
+  'Analyste Performance': 'ANALYSTE',
+  Recruteur: 'RECRUTEUR',
   Coach: 'COACH',
   Médecin: 'MEDECIN',
-  'Responsable Financier': 'RESPONSABLE_FINANCIER',
   Scout: 'SCOUT',
+  Finance: 'RESPONSABLE_FINANCIER',
+  'Responsable Financier': 'RESPONSABLE_FINANCIER',
   Analyste: 'ANALYSTE',
+  Joueur: 'JOUEUR',
 };
 
 function defaultMatrixForModule(module: string): Record<ClubMemberRole, Perm> {
-  const all = (p: Perm) =>
-    Object.fromEntries(
-      Object.values(ClubMemberRole).map((r) => [r, { ...p }]),
-    ) as Record<ClubMemberRole, Perm>;
-
   const base: Record<ClubMemberRole, Perm> = {
     CLUB_ADMIN: perm(true, true, true, true),
+    RESPONSABLE:
+      ['Joueurs', 'Equipes', 'Finances', 'Contrats', 'Calendrier', 'Analytics', 'Recrutement', 'Documents'].includes(module)
+        ? perm(true, true, true, module !== 'Parametres')
+        : perm(true, false, false, false),
+    PREPARATEUR:
+      ['Sante', 'Joueurs', 'Calendrier', 'Analytics'].includes(module)
+        ? perm(true, true, true, false)
+        : perm(true, false, false, false),
     COACH:
       ['Joueurs', 'Equipes', 'Calendrier', 'Analytics'].includes(module)
         ? perm(true, true, true, false)
@@ -44,16 +53,24 @@ function defaultMatrixForModule(module: string): Record<ClubMemberRole, Perm> {
       ['Sante', 'Joueurs'].includes(module)
         ? perm(true, true, true, false)
         : perm(true, false, false, false),
-    RESPONSABLE_FINANCIER:
-      ['Finances', 'Contrats'].includes(module)
-        ? perm(true, true, true, true)
-        : perm(true, false, false, false),
     SCOUT:
       ['Recrutement', 'Joueurs', 'Analytics'].includes(module)
         ? perm(true, true, true, false)
         : perm(false, false, false, false),
     ANALYSTE:
       ['Analytics', 'Joueurs', 'Equipes'].includes(module)
+        ? perm(true, false, false, false)
+        : perm(false, false, false, false),
+    RECRUTEUR:
+      ['Recrutement', 'Joueurs', 'Analytics'].includes(module)
+        ? perm(true, true, true, false)
+        : perm(false, false, false, false),
+    RESPONSABLE_FINANCIER:
+      ['Finances', 'Contrats'].includes(module)
+        ? perm(true, true, true, true)
+        : perm(true, false, false, false),
+    JOUEUR:
+      ['Calendrier', 'Joueurs'].includes(module)
         ? perm(true, false, false, false)
         : perm(false, false, false, false),
   };
@@ -80,25 +97,21 @@ export function buildDefaultPermissions(organizationId: string) {
 export function clubRoleToLabel(role: ClubMemberRole): string {
   const labels: Record<ClubMemberRole, string> = {
     CLUB_ADMIN: 'Club Admin',
+    RESPONSABLE: 'Responsable',
+    PREPARATEUR: 'Préparateur Physique',
     COACH: 'Coach',
     MEDECIN: 'Médecin',
-    RESPONSABLE_FINANCIER: 'Responsable Financier',
     SCOUT: 'Scout',
-    ANALYSTE: 'Analyste',
+    ANALYSTE: 'Analyste Performance',
+    RECRUTEUR: 'Recruteur',
+    RESPONSABLE_FINANCIER: 'Finance',
+    JOUEUR: 'Joueur',
   };
   return labels[role];
 }
 
 export function labelToClubRole(label: string): ClubMemberRole {
-  const entry = Object.entries({
-    'Club Admin': 'CLUB_ADMIN',
-    Coach: 'COACH',
-    Médecin: 'MEDECIN',
-    'Responsable Financier': 'RESPONSABLE_FINANCIER',
-    Scout: 'SCOUT',
-    Analyste: 'ANALYSTE',
-  }).find(([l]) => l === label);
-  return (entry?.[1] ?? 'COACH') as ClubMemberRole;
+  return LABEL_TO_ROLE[label] ?? 'COACH';
 }
 
-export { ROLE_MAP };
+export { LABEL_TO_ROLE as ROLE_MAP };
