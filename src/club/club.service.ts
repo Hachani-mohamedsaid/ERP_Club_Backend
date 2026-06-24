@@ -110,16 +110,18 @@ export class ClubService {
     ip?: string,
   ) {
     const organizationId = this.orgId(user);
-    const email = data.email.trim().toLowerCase();
+    const email = data.email?.trim().toLowerCase();
+    const fullName = data.fullName?.trim();
     const password = data.password?.trim();
 
+    if (!fullName) {
+      throw new BadRequestException('Le nom complet est requis.');
+    }
+    if (!email) {
+      throw new BadRequestException('L\'email est requis.');
+    }
     if (!password || password.length < 8) {
       throw new BadRequestException('Mot de passe temporaire requis (8 caractères minimum).');
-    }
-
-    const existingUser = await this.prisma.user.findUnique({ where: { email } });
-    if (existingUser) {
-      throw new ConflictException('Un compte existe déjà avec cet email.');
     }
 
     const clubRole = labelToClubRole(data.clubRole);
@@ -127,42 +129,92 @@ export class ClubService {
       throw new BadRequestException('Impossible de créer un second administrateur principal.');
     }
 
-    const passwordHash = await bcrypt.hash(password, 12);
     const status = data.status ? this.labelToMemberStatus(data.status) : 'ACTIF';
+    const passwordHash = await bcrypt.hash(password, 12);
 
-    const member = await this.prisma.$transaction(async (tx) => {
-      await tx.user.create({
-        data: {
-          email,
-          passwordHash,
-          fullName: data.fullName.trim(),
-          phone: '',
-          role: 'ADMIN_CLUB',
-          organizationId,
-          clubMemberRole: clubRole,
-          isActive: status === 'ACTIF',
-          acceptTerms: true,
-          acceptPrivacy: true,
-        },
-      });
-
-      return tx.clubMember.create({
-        data: {
-          organizationId,
-          fullName: data.fullName.trim(),
-          email,
-          clubRole,
-          status,
-        },
-      });
+    const existingMember = await this.prisma.clubMember.findUnique({
+      where: { organizationId_email: { organizationId, email } },
     });
+    const existingUser = await this.prisma.user.findUnique({ where: { email } });
+
+    if (existingUser) {
+      throw new ConflictException('Un compte existe déjà avec cet email.');
+    }
+
+    let member;
+
+    if (existingMember) {
+      // Ancien flux : ClubMember créé sans compte auth — on rattache le compte.
+      member = await this.prisma.$transaction(async (tx) => {
+        await tx.user.create({
+          data: {
+            email,
+            passwordHash,
+            fullName,
+            phone: '',
+            role: 'ADMIN_CLUB',
+            organizationId,
+            clubMemberRole: clubRole,
+            isActive: status === 'ACTIF',
+            acceptTerms: true,
+            acceptPrivacy: true,
+          },
+        });
+
+        return tx.clubMember.update({
+          where: { id: existingMember.id },
+          data: { fullName, clubRole, status },
+        });
+      });
+    } else {
+      try {
+        member = await this.prisma.$transaction(async (tx) => {
+          await tx.user.create({
+            data: {
+              email,
+              passwordHash,
+              fullName,
+              phone: '',
+              role: 'ADMIN_CLUB',
+              organizationId,
+              clubMemberRole: clubRole,
+              isActive: status === 'ACTIF',
+              acceptTerms: true,
+              acceptPrivacy: true,
+            },
+          });
+
+          return tx.clubMember.create({
+            data: {
+              organizationId,
+              fullName,
+              email,
+              clubRole,
+              status,
+            },
+          });
+        });
+      } catch (err) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError) {
+          if (err.code === 'P2002') {
+            throw new ConflictException('Cet email est déjà utilisé dans ce club.');
+          }
+          if (err.code === 'P2021' || err.message.includes('does not exist')) {
+            throw new BadRequestException(
+              'Base de données non à jour. Relancez le déploiement backend (prisma db push).',
+            );
+          }
+        }
+        throw err;
+      }
+    }
 
     await this.audit.log(organizationId, {
       userName: user.fullName,
       userRole: 'Club Admin',
-      action: 'Ajout utilisateur',
+      action: existingMember ? 'Activation compte utilisateur' : 'Ajout utilisateur',
       entity: member.fullName,
-      details: `Rôle: ${data.clubRole} — compte de connexion créé`,
+      details: `Rôle: ${data.clubRole} — compte de connexion ${existingMember ? 'activé' : 'créé'}`,
       type: AuditActionType.CREATION,
       ipAddress: ip,
     });
