@@ -46,8 +46,8 @@ model ClubDashboardStats {
   organizationId   String       @unique
   organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   playersCount     Int          @default(0)
-  staffCount       Int          @default(1)
-  budgetRemaining  Int          @default(500000)
+  staffCount       Int          @default(0)
+  budgetRemaining  Int          @default(0)
   payrollTotal     Int          @default(0)
   injuredCount     Int          @default(0)
   contractsToRenew Int          @default(0)
