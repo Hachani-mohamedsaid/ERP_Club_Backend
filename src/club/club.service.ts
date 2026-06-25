@@ -1184,4 +1184,380 @@ export class ClubService {
       })),
     };
   }
+
+  // ─── Player Photo ───────────────────────────────────────────────
+  async updatePlayerPhoto(user: JwtPayload, playerId: string, photoUrl: string) {
+    const organizationId = this.orgId(user);
+    const player = await this.prisma.clubPlayer.findFirst({
+      where: { id: playerId, organizationId },
+    });
+    if (!player) throw new NotFoundException('Joueur introuvable.');
+    return this.prisma.clubPlayer.update({
+      where: { id: playerId },
+      data: { photoUrl },
+    });
+  }
+
+  // ─── Player Stats (aggregate) ──────────────────────────────────
+  async getPlayerStats(user: JwtPayload, playerId: string) {
+    const organizationId = this.orgId(user);
+    const player = await this.prisma.clubPlayer.findFirst({
+      where: { id: playerId, organizationId },
+    });
+    if (!player) throw new NotFoundException('Joueur introuvable.');
+
+    if (!player.stats) {
+      const seeded = this.seedPlayerStats(player);
+      await this.prisma.clubPlayer.update({
+        where: { id: playerId },
+        data: { stats: seeded as never },
+      });
+      return seeded;
+    }
+    return player.stats;
+  }
+
+  async updatePlayerStats(user: JwtPayload, playerId: string, stats: Record<string, unknown>) {
+    const organizationId = this.orgId(user);
+    const player = await this.prisma.clubPlayer.findFirst({
+      where: { id: playerId, organizationId },
+    });
+    if (!player) throw new NotFoundException('Joueur introuvable.');
+    const existing = (player.stats as Record<string, unknown>) ?? {};
+    const merged = { ...existing, ...stats };
+    await this.prisma.clubPlayer.update({
+      where: { id: playerId },
+      data: { stats: merged as never },
+    });
+    return merged;
+  }
+
+  private seedPlayerStats(player: { ovr: number; goals: number; fullName: string }) {
+    const ovr = player.ovr || 75;
+    const base = Math.max(60, ovr - 10);
+    const months = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin'];
+    return {
+      form: Math.min(100, base + Math.round(Math.random() * 15)),
+      vitesse: Math.min(99, base + Math.round(Math.random() * 20)),
+      technique: Math.min(99, ovr + Math.round(Math.random() * 8 - 4)),
+      physique: Math.min(99, base + Math.round(Math.random() * 15)),
+      mental: Math.min(99, base + Math.round(Math.random() * 18)),
+      coachRating: +(7 + Math.random() * 2).toFixed(1),
+      positionRanking: Math.ceil(Math.random() * 5) + 1,
+      performanceEvolution: months.map((month, i) => ({
+        month,
+        score: Math.min(99, base + i * 2 + Math.round(Math.random() * 8)),
+      })),
+      goalContribution: [
+        { name: 'Buts', value: Math.max(5, Math.min(60, (player.goals ?? 0) * 6 || 35)), color: '#FF6B57' },
+        { name: 'Assists', value: Math.round(Math.random() * 25) + 15, color: '#3B82F6' },
+        { name: 'Chances', value: Math.round(Math.random() * 20) + 10, color: '#22C55E' },
+      ],
+      trainingLoad: Math.round(40 + Math.random() * 50),
+      trainingSessions: { completed: Math.ceil(Math.random() * 2) + 3, total: 5, intensity: 'Élevée', fatiguePredicted: Math.round(35 + Math.random() * 40) },
+      seasonStats: { goals: player.goals ?? 0, assists: Math.round(Math.random() * 8) + 1, matches: Math.round(Math.random() * 10) + 10 },
+      dashboardHero: {
+        marketValue: `${(Math.random() * 2 + 0.5).toFixed(1)}M €`,
+        coachRating: +(7 + Math.random() * 2).toFixed(1),
+        positionRanking: Math.ceil(Math.random() * 5) + 1,
+        positionLabel: 'Liga 1',
+      },
+      marketValueTrend: { change: `+${(Math.random() * 15 + 3).toFixed(0)}%` },
+    };
+  }
+
+  // ─── Match Stats ────────────────────────────────────────────────
+  async getMatchStats(user: JwtPayload, playerId: string) {
+    const organizationId = this.orgId(user);
+    const existing = await this.prisma.playerMatchStat.findMany({
+      where: { organizationId, playerId },
+      orderBy: { matchDate: 'desc' },
+    });
+    if (existing.length === 0) {
+      await this.seedMatchStats(organizationId, playerId);
+      return this.prisma.playerMatchStat.findMany({
+        where: { organizationId, playerId },
+        orderBy: { matchDate: 'desc' },
+      });
+    }
+    return existing;
+  }
+
+  async createMatchStat(user: JwtPayload, playerId: string, data: Record<string, unknown>) {
+    const organizationId = this.orgId(user);
+    return this.prisma.playerMatchStat.create({
+      data: {
+        organizationId,
+        playerId,
+        matchDate: data.matchDate ? new Date(String(data.matchDate)) : new Date(),
+        opponent: String(data.opponent ?? ''),
+        result: String(data.result ?? ''),
+        goals: Number(data.goals ?? 0),
+        assists: Number(data.assists ?? 0),
+        minutes: Number(data.minutes ?? 90),
+        rating: Number(data.rating ?? 6),
+        distance: Number(data.distance ?? 0),
+        sprints: Number(data.sprints ?? 0),
+        passAccuracy: Number(data.passAccuracy ?? 0),
+        topSpeed: Number(data.topSpeed ?? 0),
+        keyPasses: Number(data.keyPasses ?? 0),
+        heatmapData: (data.heatmapData as never) ?? null,
+      },
+    });
+  }
+
+  private async seedMatchStats(organizationId: string, playerId: string) {
+    const opponents = ['ES Sahel', 'CS Sfaxien', 'US Monastir', 'CA Bizertin', 'Espérance ST'];
+    const results = ['2-1', '1-0', '3-2', '0-1', '2-0'];
+    const records = opponents.map((opponent, i) => {
+      const rating = +(6.5 + Math.random() * 2.5).toFixed(1);
+      const d = new Date();
+      d.setDate(d.getDate() - (i + 1) * 14);
+      return {
+        organizationId,
+        playerId,
+        matchDate: d,
+        opponent,
+        result: results[i],
+        goals: Math.round(Math.random() * 2),
+        assists: Math.round(Math.random() * 1),
+        minutes: Math.random() > 0.2 ? 90 : 65,
+        rating,
+        distance: +(9 + Math.random() * 3).toFixed(1),
+        sprints: Math.round(20 + Math.random() * 25),
+        passAccuracy: Math.round(72 + Math.random() * 20),
+        topSpeed: +(30 + Math.random() * 5).toFixed(1),
+        keyPasses: Math.round(Math.random() * 4),
+        heatmapData: Prisma.JsonNull,
+      };
+    });
+    await this.prisma.playerMatchStat.createMany({ data: records });
+  }
+
+  // ─── Awards ──────────────────────────────────────────────────────
+  async getAwards(user: JwtPayload, playerId: string) {
+    const organizationId = this.orgId(user);
+    const existing = await this.prisma.playerAward.findMany({
+      where: { organizationId, playerId },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (existing.length === 0) {
+      await this.seedAwards(organizationId, playerId);
+      return this.prisma.playerAward.findMany({
+        where: { organizationId, playerId },
+        orderBy: { createdAt: 'desc' },
+      });
+    }
+    return existing;
+  }
+
+  async createAward(user: JwtPayload, playerId: string, data: Record<string, unknown>) {
+    const organizationId = this.orgId(user);
+    return this.prisma.playerAward.create({
+      data: {
+        organizationId,
+        playerId,
+        title: String(data.title ?? ''),
+        season: String(data.season ?? '2025-26'),
+        icon: String(data.icon ?? '🏆'),
+        color: String(data.color ?? '#d99a1f'),
+        awardType: String(data.awardType ?? 'award'),
+        year: data.year ? String(data.year) : null,
+        club: data.club ? String(data.club) : null,
+        event: data.event ? String(data.event) : null,
+      },
+    });
+  }
+
+  async deleteAward(user: JwtPayload, awardId: string) {
+    const organizationId = this.orgId(user);
+    await this.prisma.playerAward.deleteMany({ where: { id: awardId, organizationId } });
+    return { message: 'Award supprimé' };
+  }
+
+  private async seedAwards(organizationId: string, playerId: string) {
+    const awards = [
+      { title: 'Joueur du Mois', season: 'Mai 2026', icon: '🥇', color: '#d99a1f', awardType: 'award' },
+      { title: 'Meilleur Buteur', season: 'Saison 2025-26', icon: '⚽', color: '#FF6B57', awardType: 'award' },
+      { title: 'Fair-Play Award', season: '2024-25', icon: '🤝', color: '#22C55E', awardType: 'award' },
+    ];
+    const trophies = [
+      { title: 'Champion Liga 1', season: '2024-25', icon: '🏆', color: '#d99a1f', awardType: 'trophy', year: '2025', club: 'FC Carthage' },
+      { title: 'Coupe de Tunisie', season: '2023-24', icon: '🥈', color: '#9ca3af', awardType: 'trophy', year: '2024', club: 'FC Carthage' },
+    ];
+    const career = [
+      { title: 'Première sélection', season: '2022', icon: '⭐', color: '#3B82F6', awardType: 'career', year: '2022', club: 'Club Sportif Sfaxien', event: 'Première sélection' },
+      { title: 'Championnat remporté', season: '2024', icon: '🏆', color: '#d99a1f', awardType: 'career', year: '2024', club: 'FC Carthage', event: 'Championnat remporté' },
+    ];
+    const all = [...awards, ...trophies, ...career];
+    await this.prisma.playerAward.createMany({
+      data: all.map((a) => ({ organizationId, playerId, ...a })),
+    });
+  }
+
+  // ─── Documents ───────────────────────────────────────────────────
+  async getDocuments(user: JwtPayload, playerId: string) {
+    const organizationId = this.orgId(user);
+    const player = await this.prisma.clubPlayer.findFirst({ where: { id: playerId, organizationId } });
+    const playerName = player?.fullName ?? 'Joueur';
+    const existing = await this.prisma.playerDocument.findMany({
+      where: { organizationId, playerId },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, name: true, docType: true, docDate: true, size: true, createdAt: true },
+    });
+    if (existing.length === 0) {
+      await this.seedDocuments(organizationId, playerId, playerName);
+      return this.prisma.playerDocument.findMany({
+        where: { organizationId, playerId },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, name: true, docType: true, docDate: true, size: true, createdAt: true },
+      });
+    }
+    return existing;
+  }
+
+  async getDocumentFile(user: JwtPayload, docId: string) {
+    const organizationId = this.orgId(user);
+    const doc = await this.prisma.playerDocument.findFirst({ where: { id: docId, organizationId } });
+    if (!doc) throw new NotFoundException('Document introuvable.');
+    return doc;
+  }
+
+  async createDocument(user: JwtPayload, playerId: string, data: Record<string, unknown>) {
+    const organizationId = this.orgId(user);
+    return this.prisma.playerDocument.create({
+      data: {
+        organizationId,
+        playerId,
+        name: String(data.name ?? 'document'),
+        docType: String(data.docType ?? 'Personnel'),
+        docDate: String(data.docDate ?? new Date().toLocaleDateString('fr-FR')),
+        size: String(data.size ?? '—'),
+        fileData: data.fileData ? String(data.fileData) : null,
+      },
+    });
+  }
+
+  async deleteDocument(user: JwtPayload, docId: string) {
+    const organizationId = this.orgId(user);
+    await this.prisma.playerDocument.deleteMany({ where: { id: docId, organizationId } });
+    return { message: 'Document supprimé' };
+  }
+
+  private async seedDocuments(organizationId: string, playerId: string, playerName: string) {
+    const today = new Date().toLocaleDateString('fr-FR');
+    const docs = [
+      { name: 'Contrat_2024.pdf', docType: 'Contrat', docDate: '01/01/2024', size: '1.2 MB' },
+      { name: 'Certificat_Medical.pdf', docType: 'Médical', docDate: today, size: '890 KB' },
+      { name: 'Carte_Identite.pdf', docType: 'Identité', docDate: '10/01/2026', size: '2.4 MB' },
+    ];
+    await this.prisma.playerDocument.createMany({
+      data: docs.map((d) => ({ organizationId, playerId, ...d })),
+    });
+  }
+
+  // ─── Transfers ───────────────────────────────────────────────────
+  async getTransfers(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const existing = await this.prisma.playerTransfer.findMany({
+      where: { organizationId },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (existing.length === 0) {
+      await this.seedTransfers(organizationId, user.fullName);
+      return this.prisma.playerTransfer.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+      });
+    }
+    return existing;
+  }
+
+  async createTransfer(user: JwtPayload, data: Record<string, unknown>) {
+    const organizationId = this.orgId(user);
+    return this.prisma.playerTransfer.create({
+      data: {
+        organizationId,
+        playerName: String(data.playerName ?? ''),
+        transferType: String(data.transferType ?? 'Rumeur'),
+        club: String(data.club ?? ''),
+        value: String(data.value ?? '0'),
+        status: String(data.status ?? 'Scouting'),
+        probability: Number(data.probability ?? 0),
+      },
+    });
+  }
+
+  async deleteTransfer(user: JwtPayload, id: string) {
+    const organizationId = this.orgId(user);
+    await this.prisma.playerTransfer.deleteMany({ where: { id, organizationId } });
+    return { message: 'Transfert supprimé' };
+  }
+
+  private async seedTransfers(organizationId: string, adminName: string) {
+    const players = await this.prisma.clubPlayer.findMany({ where: { organizationId }, take: 6 });
+    if (players.length === 0) return;
+    const clubs = ['CS Sfaxien', 'US Monastir', 'JS Kairouan', 'Espérance ST', 'Al-Ahli'];
+    const statuses = ['Négociation', 'Offre reçue', 'Scouting', 'Intérêt'];
+    const transfers = players.slice(0, 4).map((p, i) => ({
+      organizationId,
+      playerName: p.fullName,
+      transferType: i < 2 ? 'Sortant' : i === 2 ? 'Entrant' : 'Rumeur',
+      club: clubs[i % clubs.length],
+      value: `${(0.5 + Math.random() * 3).toFixed(1)}M €`,
+      status: statuses[i % statuses.length],
+      probability: Math.round(20 + Math.random() * 70),
+    }));
+    await this.prisma.playerTransfer.createMany({ data: transfers });
+  }
+
+  // ─── Chemistry ───────────────────────────────────────────────────
+  async getChemistry(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const existing = await this.prisma.playerChemistry.findMany({
+      where: { organizationId },
+      orderBy: { chemistry: 'desc' },
+    });
+    if (existing.length === 0) {
+      await this.seedChemistry(organizationId);
+      return this.prisma.playerChemistry.findMany({
+        where: { organizationId },
+        orderBy: { chemistry: 'desc' },
+      });
+    }
+    return existing;
+  }
+
+  async updateChemistry(user: JwtPayload, id: string, chemistry: number) {
+    const organizationId = this.orgId(user);
+    return this.prisma.playerChemistry.updateMany({
+      where: { id, organizationId },
+      data: { chemistry: Math.min(100, Math.max(0, chemistry)) },
+    });
+  }
+
+  private async seedChemistry(organizationId: string) {
+    const players = await this.prisma.clubPlayer.findMany({
+      where: { organizationId },
+      take: 8,
+      orderBy: { ovr: 'desc' },
+    });
+    if (players.length < 2) return;
+    const pairs: Array<{ organizationId: string; player1Id: string; player1Name: string; player2Id: string; player2Name: string; chemistry: number }> = [];
+    for (let i = 0; i < Math.min(players.length, 6); i++) {
+      for (let j = i + 1; j < Math.min(players.length, 6); j++) {
+        pairs.push({
+          organizationId,
+          player1Id: players[i].id,
+          player1Name: players[i].fullName,
+          player2Id: players[j].id,
+          player2Name: players[j].fullName,
+          chemistry: Math.round(55 + Math.random() * 45),
+        });
+      }
+    }
+    if (pairs.length > 0) {
+      await this.prisma.playerChemistry.createMany({ data: pairs, skipDuplicates: true });
+    }
+  }
 }

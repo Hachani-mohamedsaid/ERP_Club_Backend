@@ -233,4 +233,132 @@ export class ClubController {
   createInfrastructure(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
     return this.club.createInfrastructure(user, body);
   }
+
+  // ─── Player Photo ────────────────────────────────────────────────
+  @Patch('players/:id/photo')
+  updatePlayerPhoto(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { photoUrl: string },
+  ) {
+    return this.club.updatePlayerPhoto(user, id, body.photoUrl);
+  }
+
+  // ─── Player Stats ─────────────────────────────────────────────────
+  @Get('players/:id/stats')
+  getPlayerStats(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.getPlayerStats(user, id);
+  }
+
+  @Patch('players/:id/stats')
+  updatePlayerStats(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.updatePlayerStats(user, id, body);
+  }
+
+  // ─── Match Stats ──────────────────────────────────────────────────
+  @Get('players/:id/match-stats')
+  getMatchStats(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.getMatchStats(user, id);
+  }
+
+  @Post('players/:id/match-stats')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Joueurs', 'create')
+  createMatchStat(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.createMatchStat(user, id, body);
+  }
+
+  // ─── Awards ───────────────────────────────────────────────────────
+  @Get('players/:id/awards')
+  getAwards(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.getAwards(user, id);
+  }
+
+  @Post('players/:id/awards')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Joueurs', 'create')
+  createAward(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.createAward(user, id, body);
+  }
+
+  @Delete('awards/:id')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Joueurs', 'delete')
+  deleteAward(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.deleteAward(user, id);
+  }
+
+  // ─── Documents ────────────────────────────────────────────────────
+  @Get('players/:id/documents')
+  getDocuments(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.getDocuments(user, id);
+  }
+
+  @Get('documents/:id/file')
+  getDocumentFile(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.getDocumentFile(user, id);
+  }
+
+  @Post('players/:id/documents')
+  createDocument(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.createDocument(user, id, body);
+  }
+
+  @Delete('documents/:id')
+  deleteDocument(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.deleteDocument(user, id);
+  }
+
+  // ─── Transfers ────────────────────────────────────────────────────
+  @Get('transfers')
+  getTransfers(@CurrentUser() user: JwtPayload) {
+    return this.club.getTransfers(user);
+  }
+
+  @Post('transfers')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Joueurs', 'create')
+  createTransfer(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
+    return this.club.createTransfer(user, body);
+  }
+
+  @Delete('transfers/:id')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Joueurs', 'delete')
+  deleteTransfer(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.deleteTransfer(user, id);
+  }
+
+  // ─── Chemistry ────────────────────────────────────────────────────
+  @Get('chemistry')
+  getChemistry(@CurrentUser() user: JwtPayload) {
+    return this.club.getChemistry(user);
+  }
+
+  @Patch('chemistry/:id')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Joueurs', 'update')
+  updateChemistry(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { chemistry: number },
+  ) {
+    return this.club.updateChemistry(user, id, body.chemistry);
+  }
 }

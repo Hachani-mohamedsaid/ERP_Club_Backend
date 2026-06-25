@@ -155,6 +155,11 @@ model Organization {
   platformPayments PlatformPayment[]
   supportTickets  PlatformSupportTicket[]
   analysteModules AnalysteModuleData[]
+  playerMatchStats PlayerMatchStat[]
+  playerAwards    PlayerAward[]
+  playerDocuments PlayerDocument[]
+  playerTransfers PlayerTransfer[]
+  playerChemistry PlayerChemistry[]
   createdAt       DateTime             @default(now())
   updatedAt       DateTime             @updatedAt
 }
@@ -280,9 +285,103 @@ model ClubPlayer {
   salaryMonthly  Int          @default(0)
   status         PlayerStatus @default(DISPONIBLE)
   radar          Json?
+  photoUrl       String?
+  stats          Json?
   linkedMember   ClubMember?
+  matchStats     PlayerMatchStat[]
+  awards         PlayerAward[]
+  documents      PlayerDocument[]
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
+}
+
+model PlayerMatchStat {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  playerId       String
+  player         ClubPlayer   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  matchDate      DateTime
+  opponent       String
+  result         String       @default("")
+  goals          Int          @default(0)
+  assists        Int          @default(0)
+  minutes        Int          @default(90)
+  rating         Float        @default(6.0)
+  distance       Float        @default(0)
+  sprints        Int          @default(0)
+  passAccuracy   Int          @default(0)
+  topSpeed       Float        @default(0)
+  keyPasses      Int          @default(0)
+  heatmapData    Json?
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId, playerId])
+}
+
+model PlayerAward {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  playerId       String
+  player         ClubPlayer   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  title          String
+  season         String
+  icon           String       @default("🏆")
+  color          String       @default("#d99a1f")
+  awardType      String       @default("award")
+  year           String?
+  club           String?
+  event          String?
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId, playerId])
+}
+
+model PlayerDocument {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  playerId       String
+  player         ClubPlayer   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  name           String
+  docType        String       @default("Personnel")
+  docDate        String
+  size           String
+  fileData       String?      @db.Text
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId, playerId])
+}
+
+model PlayerTransfer {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  playerName     String
+  transferType   String
+  club           String
+  value          String
+  status         String
+  probability    Int          @default(0)
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId])
+}
+
+model PlayerChemistry {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  player1Id      String
+  player1Name    String
+  player2Id      String
+  player2Name    String
+  chemistry      Int          @default(75)
+  createdAt      DateTime     @default(now())
+
+  @@unique([organizationId, player1Id, player2Id])
+  @@index([organizationId])
 }
 
 model ClubStaff {
