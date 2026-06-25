@@ -189,8 +189,8 @@ export class ClubController {
   @Post('contracts')
   @UseGuards(PermissionsGuard)
   @RequirePermission('Contrats', 'create')
-  createContract(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
-    return this.club.createContract(user, body);
+  createContract(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>, @Req() req: Request) {
+    return this.club.createContract(user, body, this.ip(req));
   }
 
   @Get('calendar')
@@ -215,6 +215,11 @@ export class ClubController {
   @RequirePermission('Sante', 'create')
   createInjury(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
     return this.club.createInjury(user, body);
+  }
+
+  @Get('analytics')
+  getAnalytics(@CurrentUser() user: JwtPayload) {
+    return this.club.getAnalytics(user);
   }
 
   @Get('infrastructures')

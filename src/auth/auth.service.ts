@@ -161,6 +161,14 @@ export class AuthService {
     const org = user.ownedOrganization ?? user.memberOrganization;
     const clubMemberRole = await this.resolveClubMemberRole(user.id, user.email, org?.id ?? null, user.clubMemberRole);
     const clubMemberRoleLabel = clubRoleToLabel(clubMemberRole);
+    let playerId: string | null = null;
+    if (org && clubMemberRole === 'JOUEUR') {
+      const member = await this.prisma.clubMember.findFirst({
+        where: { organizationId: org.id, email: user.email },
+        select: { clubPlayerId: true },
+      });
+      playerId = member?.clubPlayerId ?? null;
+    }
 
     const payload: JwtPayload = {
       sub: user.id,
@@ -198,6 +206,7 @@ export class AuthService {
         fullName: user.fullName,
         role: user.role,
         clubMemberRole: clubMemberRoleLabel,
+        playerId,
       },
       organization: org
         ? {

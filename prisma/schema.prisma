@@ -147,11 +147,14 @@ model ClubMember {
   email          String
   clubRole       ClubMemberRole @default(COACH)
   status         MemberStatus   @default(ACTIF)
+  clubPlayerId   String?
+  clubPlayer     ClubPlayer?    @relation(fields: [clubPlayerId], references: [id], onDelete: SetNull)
   lastLoginAt    DateTime?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
   @@unique([organizationId, email])
+  @@unique([organizationId, clubPlayerId])
 }
 
 model ClubPermission {
@@ -224,6 +227,7 @@ model ClubPlayer {
   salaryMonthly  Int          @default(0)
   status         PlayerStatus @default(DISPONIBLE)
   radar          Json?
+  linkedMember   ClubMember?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 }

@@ -25,6 +25,7 @@ import {
   PERMISSION_MODULES,
 } from './permissions-seed';
 import { buildDefaultDashboardSeed } from '../organizations/dashboard-seed';
+import { buildClubAnalytics } from './club-analytics.util';
 
 @Injectable()
 export class ClubService {
@@ -106,17 +107,22 @@ export class ClubService {
 
   async createMember(
     user: JwtPayload,
-    data: { fullName: string; email: string; clubRole: string; password?: string; status?: string },
+    data: {
+      fullName: string;
+      email: string;
+      clubRole: string;
+      password?: string;
+      status?: string;
+      clubPlayerId?: string;
+    },
     ip?: string,
   ) {
     const organizationId = this.orgId(user);
     const email = data.email?.trim().toLowerCase();
-    const fullName = data.fullName?.trim();
+    let fullName = data.fullName?.trim();
     const password = data.password?.trim();
+    const clubPlayerId = data.clubPlayerId?.trim() || undefined;
 
-    if (!fullName) {
-      throw new BadRequestException('Le nom complet est requis.');
-    }
     if (!email) {
       throw new BadRequestException('L\'email est requis.');
     }
@@ -127,6 +133,29 @@ export class ClubService {
     const clubRole = labelToClubRole(data.clubRole);
     if (clubRole === 'CLUB_ADMIN') {
       throw new BadRequestException('Impossible de créer un second administrateur principal.');
+    }
+
+    if (clubRole === 'JOUEUR') {
+      if (!clubPlayerId) {
+        throw new BadRequestException('Sélectionnez un joueur de l\'effectif à associer au compte.');
+      }
+      const player = await this.prisma.clubPlayer.findFirst({
+        where: { id: clubPlayerId, organizationId },
+      });
+      if (!player) {
+        throw new BadRequestException('Joueur introuvable dans l\'effectif.');
+      }
+      const linked = await this.prisma.clubMember.findFirst({
+        where: { organizationId, clubPlayerId },
+      });
+      if (linked) {
+        throw new ConflictException('Ce joueur possède déjà un compte utilisateur.');
+      }
+      fullName = fullName || player.fullName;
+    }
+
+    if (!fullName) {
+      throw new BadRequestException('Le nom complet est requis.');
     }
 
     const status = data.status ? this.labelToMemberStatus(data.status) : 'ACTIF';
@@ -163,7 +192,7 @@ export class ClubService {
 
         return tx.clubMember.update({
           where: { id: existingMember.id },
-          data: { fullName, clubRole, status },
+          data: { fullName, clubRole, status, ...(clubPlayerId && { clubPlayerId }) },
         });
       });
     } else {
@@ -191,6 +220,7 @@ export class ClubService {
               email,
               clubRole,
               status,
+              ...(clubPlayerId && { clubPlayerId }),
             },
           });
         });
@@ -324,6 +354,7 @@ export class ClubService {
     email: string;
     clubRole: ClubMemberRole;
     status: MemberStatus;
+    clubPlayerId?: string | null;
     lastLoginAt: Date | null;
     createdAt: Date;
   }) {
@@ -338,6 +369,7 @@ export class ClubService {
       email: m.email,
       role: clubRoleToLabel(m.clubRole),
       status: statusMap[m.status],
+      clubPlayerId: m.clubPlayerId ?? null,
       lastLogin: m.lastLoginAt
         ? m.lastLoginAt.toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
         : '—',
@@ -610,11 +642,34 @@ export class ClubService {
   // ─── Players ───────────────────────────────────────────────────
   async listPlayers(user: JwtPayload) {
     const organizationId = this.orgId(user);
-    const players = await this.prisma.clubPlayer.findMany({
-      where: { organizationId },
-      orderBy: { fullName: 'asc' },
+    const [players, joueurMembers] = await Promise.all([
+      this.prisma.clubPlayer.findMany({
+        where: { organizationId },
+        orderBy: { fullName: 'asc' },
+      }),
+      this.prisma.clubMember.findMany({
+        where: { organizationId, clubRole: 'JOUEUR' },
+        select: { clubPlayerId: true, email: true, fullName: true },
+      }),
+    ]);
+
+    const memberByPlayerId = new Map(
+      joueurMembers.filter((m) => m.clubPlayerId).map((m) => [m.clubPlayerId!, m]),
+    );
+    const memberByName = new Map(
+      joueurMembers.map((m) => [m.fullName.trim().toLowerCase(), m]),
+    );
+
+    return players.map((p) => {
+      const linked =
+        memberByPlayerId.get(p.id) ??
+        memberByName.get(p.fullName.trim().toLowerCase());
+      return {
+        ...this.formatPlayer(p),
+        hasAccount: Boolean(linked),
+        accountEmail: linked?.email ?? null,
+      };
     });
-    return players.map((p) => this.formatPlayer(p));
   }
 
   async createPlayer(user: JwtPayload, data: Record<string, unknown>, ip?: string) {
@@ -908,21 +963,46 @@ export class ClubService {
     });
   }
 
-  async createContract(user: JwtPayload, data: Record<string, unknown>) {
+  async createContract(user: JwtPayload, data: Record<string, unknown>, ip?: string) {
     const organizationId = this.orgId(user);
+    const holderName = String(data.holderName ?? '').trim();
+    if (!holderName) {
+      throw new BadRequestException('Le titulaire est requis.');
+    }
+    const startDate = new Date(String(data.startDate ?? Date.now()));
+    const endDate = new Date(String(data.endDate ?? Date.now()));
+    if (endDate <= startDate) {
+      throw new BadRequestException('La date de fin doit être après la date de début.');
+    }
+    const total = endDate.getTime() - startDate.getTime();
+    const elapsed = Date.now() - startDate.getTime();
+    const consumedPct =
+      data.consumedPct != null
+        ? Number(data.consumedPct)
+        : Math.min(100, Math.max(0, Math.round((elapsed / total) * 100)));
+
     const c = await this.prisma.clubContract.create({
       data: {
         organizationId,
-        holderName: String(data.holderName ?? ''),
-        startDate: new Date(String(data.startDate ?? Date.now())),
-        endDate: new Date(String(data.endDate ?? Date.now())),
+        holderName,
+        startDate,
+        endDate,
         salaryMonthly: Number(data.salaryMonthly ?? 0),
         bonus: Number(data.bonus ?? 0),
         releaseClause: data.releaseClause ? String(data.releaseClause) : null,
-        consumedPct: Number(data.consumedPct ?? 0),
+        consumedPct,
       },
     });
     await this.syncDashboardStats(organizationId);
+    await this.audit.log(organizationId, {
+      userName: user.fullName,
+      userRole: 'Club Admin',
+      action: 'Création contrat',
+      entity: holderName,
+      details: `Fin: ${endDate.toLocaleDateString('fr-FR')}`,
+      type: AuditActionType.CREATION,
+      ipAddress: ip,
+    });
     return c;
   }
 
@@ -952,42 +1032,81 @@ export class ClubService {
   // ─── Injuries ──────────────────────────────────────────────────
   async listInjuries(user: JwtPayload) {
     const organizationId = this.orgId(user);
-    const injuries = await this.prisma.clubInjury.findMany({
-      where: { organizationId },
-      orderBy: { createdAt: 'desc' },
-    });
-    const playersCount = await this.prisma.clubPlayer.count({ where: { organizationId } });
+    const [injuries, playersCount] = await Promise.all([
+      this.prisma.clubInjury.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.clubPlayer.count({ where: { organizationId } }),
+    ]);
+    const injuredPlayers = new Set(injuries.map((i) => i.playerName));
+    const avgRiskScore = injuries.length
+      ? injuries.reduce((s, i) => s + i.riskScore, 0) / injuries.length
+      : 0;
     return {
       kpis: {
-        injured: injuries.length,
-        available: Math.max(0, playersCount - injuries.length),
-        avgRisk: injuries.length
-          ? Math.round(injuries.reduce((s, i) => s + i.riskScore, 0) / injuries.length)
-          : 0,
+        injured: injuredPlayers.size,
+        available: Math.max(0, playersCount - injuredPlayers.size),
+        avgRisk: Math.round(avgRiskScore * 10),
       },
       injured: injuries.map((i) => ({
+        id: i.id,
         name: i.playerName,
         injury: i.injuryType,
+        bodyPart: i.bodyPart,
         returnDate: i.returnDate?.toLocaleDateString('fr-FR') ?? '—',
         riskIA: i.riskScore,
+        createdAt: i.createdAt.toISOString(),
       })),
     };
   }
 
   async createInjury(user: JwtPayload, data: Record<string, unknown>) {
     const organizationId = this.orgId(user);
+    const playerName = String(data.playerName ?? '');
     const injury = await this.prisma.clubInjury.create({
       data: {
         organizationId,
-        playerName: String(data.playerName ?? ''),
+        playerName,
         injuryType: String(data.injuryType ?? ''),
         bodyPart: data.bodyPart ? String(data.bodyPart) : null,
         returnDate: data.returnDate ? new Date(String(data.returnDate)) : null,
-        riskScore: Number(data.riskScore ?? 0),
+        riskScore: Math.min(10, Math.max(0, Number(data.riskScore ?? 0))),
       },
     });
+    if (playerName) {
+      await this.prisma.clubPlayer.updateMany({
+        where: { organizationId, fullName: playerName },
+        data: { status: 'BLESSE' },
+      });
+    }
     await this.syncDashboardStats(organizationId);
-    return injury;
+    return {
+      id: injury.id,
+      name: injury.playerName,
+      injury: injury.injuryType,
+      bodyPart: injury.bodyPart,
+      returnDate: injury.returnDate?.toLocaleDateString('fr-FR') ?? '—',
+      riskIA: injury.riskScore,
+      createdAt: injury.createdAt.toISOString(),
+    };
+  }
+
+  // ─── Analytics ─────────────────────────────────────────────────
+  async getAnalytics(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const [players, events] = await Promise.all([
+      this.prisma.clubPlayer.findMany({
+        where: { organizationId },
+        orderBy: { ovr: 'desc' },
+      }),
+      this.prisma.clubCalendarEvent.findMany({
+        where: { organizationId },
+        orderBy: { eventDate: 'asc' },
+      }),
+    ]);
+
+    return buildClubAnalytics(players, events);
   }
 
   // ─── Infrastructure ────────────────────────────────────────────
@@ -995,14 +1114,35 @@ export class ClubService {
     const organizationId = this.orgId(user);
     const items = await this.prisma.clubInfrastructure.findMany({
       where: { organizationId },
-      include: { maintenances: true },
+      include: { maintenances: { orderBy: { scheduledDate: 'asc' } } },
+      orderBy: { createdAt: 'asc' },
     });
-    return items;
+    return items.map((item) => ({
+      id: item.id,
+      name: item.name,
+      infraType: item.infraType,
+      status: item.status,
+      capacity: item.capacity,
+      occupationPct: item.occupationPct,
+      nextMaintenance: item.nextMaintenance?.toISOString() ?? null,
+      maintenances: item.maintenances.map((m) => ({
+        id: m.id,
+        taskType: m.taskType,
+        scheduledDate: m.scheduledDate.toISOString(),
+      })),
+    }));
   }
 
   async createInfrastructure(user: JwtPayload, data: Record<string, unknown>) {
     const organizationId = this.orgId(user);
-    return this.prisma.clubInfrastructure.create({
+    const nextMaintenance = data.nextMaintenance
+      ? new Date(String(data.nextMaintenance))
+      : null;
+    const maintenanceTask = data.maintenanceTask
+      ? String(data.maintenanceTask).trim()
+      : '';
+
+    const infra = await this.prisma.clubInfrastructure.create({
       data: {
         organizationId,
         name: String(data.name ?? ''),
@@ -1010,8 +1150,34 @@ export class ClubService {
         status: String(data.status ?? 'Bon'),
         capacity: data.capacity ? String(data.capacity) : null,
         occupationPct: Number(data.occupationPct ?? 0),
-        nextMaintenance: data.nextMaintenance ? new Date(String(data.nextMaintenance)) : null,
+        nextMaintenance,
+        ...(maintenanceTask && nextMaintenance
+          ? {
+              maintenances: {
+                create: {
+                  taskType: maintenanceTask,
+                  scheduledDate: nextMaintenance,
+                },
+              },
+            }
+          : {}),
       },
+      include: { maintenances: true },
     });
+
+    return {
+      id: infra.id,
+      name: infra.name,
+      infraType: infra.infraType,
+      status: infra.status,
+      capacity: infra.capacity,
+      occupationPct: infra.occupationPct,
+      nextMaintenance: infra.nextMaintenance?.toISOString() ?? null,
+      maintenances: infra.maintenances.map((m) => ({
+        id: m.id,
+        taskType: m.taskType,
+        scheduledDate: m.scheduledDate.toISOString(),
+      })),
+    };
   }
 }
