@@ -1052,6 +1052,24 @@ export class ClubService {
     });
   }
 
+  async bookPlayerAppointment(user: JwtPayload, playerId: string, data: Record<string, unknown>) {
+    const organizationId = this.orgId(user);
+    const player = await this.prisma.clubPlayer.findFirst({ where: { id: playerId, organizationId } });
+    const playerName = player?.name ?? 'Joueur';
+    const appointmentType = String(data.appointmentType ?? 'Bilan médical');
+    const requestedDate = data.requestedDate ? new Date(String(data.requestedDate)) : (() => { const d = new Date(); d.setDate(d.getDate() + 7); return d; })();
+    return this.prisma.clubCalendarEvent.create({
+      data: {
+        organizationId,
+        title: `${appointmentType} — ${playerName}`,
+        eventDate: requestedDate,
+        eventTime: String(data.requestedTime ?? '09:00'),
+        eventType: 'MEDICAL',
+        location: String(data.location ?? 'Infirmerie du club'),
+      },
+    });
+  }
+
   // ─── Injuries ──────────────────────────────────────────────────
   async listInjuries(user: JwtPayload) {
     const organizationId = this.orgId(user);
@@ -1364,6 +1382,8 @@ export class ClubService {
         passAccuracy: Number(data.passAccuracy ?? 0),
         topSpeed: Number(data.topSpeed ?? 0),
         keyPasses: Number(data.keyPasses ?? 0),
+        yellowCards: Number(data.yellowCards ?? 0),
+        redCards: Number(data.redCards ?? 0),
         heatmapData: (data.heatmapData as never) ?? null,
       },
     });
@@ -1391,6 +1411,8 @@ export class ClubService {
         passAccuracy: Math.round(72 + Math.random() * 20),
         topSpeed: +(30 + Math.random() * 5).toFixed(1),
         keyPasses: Math.round(Math.random() * 4),
+        yellowCards: Math.random() > 0.7 ? 1 : 0,
+        redCards: Math.random() > 0.95 ? 1 : 0,
         heatmapData: Prisma.JsonNull,
       };
     });

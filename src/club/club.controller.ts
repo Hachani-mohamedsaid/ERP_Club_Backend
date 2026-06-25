@@ -269,6 +269,16 @@ export class ClubController {
     return this.club.updatePlayerPhysical(user, id, body);
   }
 
+  // ─── Player Appointment Request (joueur books medical appointment) ──
+  @Post('players/:id/appointment')
+  bookAppointment(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.bookPlayerAppointment(user, id, body);
+  }
+
   // ─── Player Contract ───────────────────────────────────────────────
   @Get('players/:id/contract')
   getPlayerContract(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
