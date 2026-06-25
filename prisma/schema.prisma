@@ -147,14 +147,13 @@ model ClubMember {
   email          String
   clubRole       ClubMemberRole @default(COACH)
   status         MemberStatus   @default(ACTIF)
-  clubPlayerId   String?
+  clubPlayerId   String?        @unique
   clubPlayer     ClubPlayer?    @relation(fields: [clubPlayerId], references: [id], onDelete: SetNull)
   lastLoginAt    DateTime?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
   @@unique([organizationId, email])
-  @@unique([organizationId, clubPlayerId])
 }
 
 model ClubPermission {
