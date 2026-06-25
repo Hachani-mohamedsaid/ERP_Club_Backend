@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  OnModuleInit,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -18,9 +19,10 @@ import { ClubAuditService } from '../club/club-audit.service';
 import { JwtPayload } from './jwt-payload.interface';
 import { ClubMemberRole } from '@prisma/client';
 import { clubRoleToLabel } from '../club/permissions-seed';
+import { ensureSuperAdmin } from './super-admin.bootstrap';
 
 @Injectable()
-export class AuthService {
+export class AuthService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly imgbb: ImgbbService,
@@ -28,6 +30,10 @@ export class AuthService {
     private readonly jwt: JwtService,
     private readonly audit: ClubAuditService,
   ) {}
+
+  async onModuleInit() {
+    await ensureSuperAdmin(this.prisma, this.config);
+  }
 
   async registerOrganization(
     dto: RegisterOrganizationDto,
@@ -44,6 +50,16 @@ export class AuthService {
     }
 
     await this.validateInvitationCode(dto.invitationCode);
+
+    const superAdminEmail = this.config
+      .get<string>('SUPER_ADMIN_EMAIL', 'superadmin@odin-erp.com')
+      .trim()
+      .toLowerCase();
+    if (dto.email.trim().toLowerCase() === superAdminEmail) {
+      throw new BadRequestException(
+        'Cet email est réservé au compte Super Admin.',
+      );
+    }
 
     const existing = await this.prisma.user.findUnique({
       where: { email: dto.email },
@@ -159,7 +175,9 @@ export class AuthService {
     }
 
     const org = user.ownedOrganization ?? user.memberOrganization;
-    const clubMemberRole = await this.resolveClubMemberRole(user.id, user.email, org?.id ?? null, user.clubMemberRole);
+    const clubMemberRole = user.role === 'SUPER_ADMIN'
+      ? 'CLUB_ADMIN'
+      : await this.resolveClubMemberRole(user.id, user.email, org?.id ?? null, user.clubMemberRole);
     const clubMemberRoleLabel = clubRoleToLabel(clubMemberRole);
     let playerId: string | null = null;
     if (org && clubMemberRole === 'JOUEUR') {
