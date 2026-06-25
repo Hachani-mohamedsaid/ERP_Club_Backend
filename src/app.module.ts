@@ -8,6 +8,7 @@ import { OrganizationsModule } from './organizations/organizations.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { UsersModule } from './users/users.module';
 import { PlatformModule } from './platform/platform.module';
+import { AnalysteModule } from './analyste/analyste.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { PlatformModule } from './platform/platform.module';
     OrganizationsModule,
     UsersModule,
     PlatformModule,
+    AnalysteModule,
   ],
   controllers: [AppController],
   providers: [AppService],

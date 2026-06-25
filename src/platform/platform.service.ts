@@ -25,6 +25,7 @@ import {
 import { CreateOrganizationDto } from './dto/create-organization.dto';
 import { UpdateOrganizationDto } from './dto/update-organization.dto';
 import { RecordPaymentDto } from './dto/record-payment.dto';
+import { CreatePlatformUserDto } from './dto/create-platform-user.dto';
 import { assertPlatformSchema, PLATFORM_SCHEMA_HINT, isMissingPrismaTable } from './platform-schema';
 import {
   fallbackSettingsRow,
@@ -716,6 +717,81 @@ export class PlatformService implements OnModuleInit {
       data: body,
     });
     return { message: 'Utilisateur mis à jour.' };
+  }
+
+  async createUser(dto: CreatePlatformUserDto) {
+    const org = await this.prisma.organization.findUnique({
+      where: { id: dto.organizationId },
+    });
+    if (!org) throw new NotFoundException('Club introuvable.');
+
+    const existing = await this.prisma.user.findUnique({
+      where: { email: dto.email },
+    });
+    if (existing) {
+      throw new BadRequestException('Un compte existe déjà avec cet email.');
+    }
+
+    const roleMap: Record<string, string> = {
+      Admin: 'CLUB_ADMIN',
+      Coach: 'COACH',
+      Médecin: 'MEDECIN',
+      Scout: 'SCOUT',
+      Analyste: 'ANALYSTE',
+      Recruteur: 'RECRUTEUR',
+      Responsable: 'RESPONSABLE',
+      'Préparateur': 'PREPARATEUR',
+      Finance: 'RESPONSABLE_FINANCIER',
+      CLUB_ADMIN: 'CLUB_ADMIN',
+      COACH: 'COACH',
+      MEDECIN: 'MEDECIN',
+      SCOUT: 'SCOUT',
+      ANALYSTE: 'ANALYSTE',
+      RECRUTEUR: 'RECRUTEUR',
+      RESPONSABLE: 'RESPONSABLE',
+      PREPARATEUR: 'PREPARATEUR',
+      RESPONSABLE_FINANCIER: 'RESPONSABLE_FINANCIER',
+    };
+    const clubRole = (roleMap[dto.clubRole ?? 'COACH'] ?? 'COACH') as
+      | 'CLUB_ADMIN'
+      | 'COACH'
+      | 'MEDECIN'
+      | 'SCOUT'
+      | 'ANALYSTE'
+      | 'RECRUTEUR'
+      | 'RESPONSABLE'
+      | 'PREPARATEUR'
+      | 'RESPONSABLE_FINANCIER';
+
+    const passwordHash = await bcrypt.hash(dto.password, 12);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.create({
+        data: {
+          email: dto.email,
+          passwordHash,
+          fullName: dto.fullName.trim(),
+          phone: '',
+          role: 'ADMIN_CLUB',
+          organizationId: dto.organizationId,
+          clubMemberRole: clubRole,
+          isActive: true,
+          acceptTerms: true,
+          acceptPrivacy: true,
+        },
+      });
+      await tx.clubMember.create({
+        data: {
+          organizationId: dto.organizationId,
+          fullName: dto.fullName.trim(),
+          email: dto.email,
+          clubRole,
+          status: 'ACTIF',
+        },
+      });
+    });
+
+    return { message: 'Utilisateur créé.', email: dto.email };
   }
 
   async listPlans() {

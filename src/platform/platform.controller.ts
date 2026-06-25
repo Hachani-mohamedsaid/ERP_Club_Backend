@@ -15,6 +15,7 @@ import { CreateOrganizationDto } from './dto/create-organization.dto';
 import { UpdateOrganizationDto } from './dto/update-organization.dto';
 import { RecordPaymentDto } from './dto/record-payment.dto';
 import { CreateSupportTicketDto, UpdateSupportTicketDto } from './dto/support-ticket.dto';
+import { CreatePlatformUserDto } from './dto/create-platform-user.dto';
 
 @Controller('platform')
 @UseGuards(JwtAuthGuard, SuperAdminGuard)
@@ -79,6 +80,11 @@ export class PlatformController {
     @Query('club') club?: string,
   ) {
     return this.platform.listUsers({ role, status, club });
+  }
+
+  @Post('users')
+  createUser(@Body() dto: CreatePlatformUserDto) {
+    return this.platform.createUser(dto);
   }
 
   @Patch('users/:id')
