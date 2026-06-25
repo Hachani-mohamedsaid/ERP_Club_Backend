@@ -738,6 +738,15 @@ export class ClubService {
     marketValue: string;
     salaryMonthly: number;
     status: string;
+    radar?: unknown;
+    photoUrl?: string | null;
+    stats?: unknown;
+    height?: string | null;
+    weight?: string | null;
+    strongFoot?: string | null;
+    birthDate?: string | null;
+    jerseyNumber?: number | null;
+    nationality?: string | null;
   }) {
     const statusMap: Record<string, string> = {
       DISPONIBLE: 'Disponible',
@@ -745,20 +754,30 @@ export class ClubService {
       LIMITE: 'Limité',
       FIN_CONTRAT: 'Fin contrat',
     };
+    const defaultRadar = { speed: 70, shooting: 70, passing: 70, dribbling: 70, defending: 70, physical: 70, vision: 70 };
+    const dbRadar = (p.radar && typeof p.radar === 'object') ? p.radar as Record<string, number> : null;
     return {
       id: p.id,
       name: p.fullName,
       position: p.position,
+      positionFull: p.position,
       age: p.age,
       ovr: p.ovr,
       goals: p.goals ?? 0,
       marketValue: p.marketValue,
       contract: { salary: `${p.salaryMonthly.toLocaleString('fr-FR')} DT/mois` },
       availability: statusMap[p.status] ?? p.status,
-      radar: { pace: 70, shooting: 70, passing: 70, dribbling: 70, defending: 70, physical: 70 },
+      radar: dbRadar ?? defaultRadar,
+      photoUrl: p.photoUrl ?? null,
+      stats: p.stats ?? null,
+      height: p.height ?? '',
+      weight: p.weight ?? '',
+      strongFoot: p.strongFoot ?? 'Droit',
+      birthDate: p.birthDate ?? '',
+      jerseyNumber: p.jerseyNumber ?? 0,
+      nationality: p.nationality ?? 'Tunisie',
       performanceHistory: [],
       matches: [],
-      positionFull: p.position,
     };
   }
 
@@ -1230,6 +1249,50 @@ export class ClubService {
       data: { stats: merged as never },
     });
     return merged;
+  }
+
+  async updatePlayerPhysical(user: JwtPayload, playerId: string, data: Record<string, unknown>) {
+    const organizationId = this.orgId(user);
+    const player = await this.prisma.clubPlayer.findFirst({
+      where: { id: playerId, organizationId },
+    });
+    if (!player) throw new NotFoundException('Joueur introuvable.');
+    const allowed: Record<string, unknown> = {};
+    if (data.height !== undefined) allowed['height'] = String(data.height);
+    if (data.weight !== undefined) allowed['weight'] = String(data.weight);
+    if (data.strongFoot !== undefined) allowed['strongFoot'] = String(data.strongFoot);
+    if (data.birthDate !== undefined) allowed['birthDate'] = String(data.birthDate);
+    if (data.jerseyNumber !== undefined) allowed['jerseyNumber'] = Number(data.jerseyNumber);
+    if (data.nationality !== undefined) allowed['nationality'] = String(data.nationality);
+    const updated = await this.prisma.clubPlayer.update({
+      where: { id: playerId },
+      data: allowed as never,
+    });
+    return this.formatPlayer(updated);
+  }
+
+  async getPlayerContract(user: JwtPayload, playerId: string) {
+    const organizationId = this.orgId(user);
+    const player = await this.prisma.clubPlayer.findFirst({
+      where: { id: playerId, organizationId },
+    });
+    if (!player) throw new NotFoundException('Joueur introuvable.');
+    const contract = await this.prisma.clubContract.findFirst({
+      where: {
+        organizationId,
+        holderName: { contains: player.fullName, mode: 'insensitive' },
+      },
+      orderBy: { endDate: 'desc' },
+    });
+    if (!contract) return null;
+    return {
+      id: contract.id,
+      startDate: contract.startDate.toISOString().split('T')[0],
+      endDate: contract.endDate.toISOString().split('T')[0],
+      salary: `${contract.salaryMonthly.toLocaleString('fr-FR')} DT/mois`,
+      releaseClause: contract.releaseClause ?? '—',
+      consumedPct: contract.consumedPct,
+    };
   }
 
   private seedPlayerStats(player: { ovr: number; goals: number; fullName: string }) {

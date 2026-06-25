@@ -287,6 +287,12 @@ model ClubPlayer {
   radar          Json?
   photoUrl       String?
   stats          Json?
+  height         String?
+  weight         String?
+  strongFoot     String?      @default("Droit")
+  birthDate      String?
+  jerseyNumber   Int?         @default(0)
+  nationality    String?      @default("Tunisie")
   linkedMember   ClubMember?
   matchStats     PlayerMatchStat[]
   awards         PlayerAward[]
