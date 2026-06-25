@@ -8,6 +8,6 @@ import { PermissionsGuard } from './guards/permissions.guard';
 @Module({
   controllers: [ClubController],
   providers: [ClubService, ClubAccessService, ClubAuditService, PermissionsGuard],
-  exports: [ClubService, ClubAuditService],
+  exports: [ClubService, ClubAuditService, ClubAccessService],
 })
 export class ClubModule {}

@@ -1,0 +1,130 @@
+import {
+  AI_TACTICAL_CENTER,
+  ANALYSTE_INFO,
+  BENCH_PLAYERS,
+  DEFAULT_SQUAD,
+  DEFAULT_TRAINING_PLAN,
+  DETECTED_PATTERNS,
+  EVOLUTION_FORECASTS,
+  EXECUTIVE_AI_RECO,
+  EXECUTIVE_KPIS,
+  INJURY_PREDICTIONS,
+  MARKET_VALUES,
+  MATCH_EVENTS,
+  OPPONENT_INTEL,
+  SCOUTING_COMPARE,
+  TACTICAL_SUGGESTIONS,
+  VIDEO_COACH_INSIGHTS,
+} from './data/analysteData';
+import {
+  CHEMISTRY_MATRIX,
+  CHEMISTRY_NODE_POSITIONS,
+  CHEMISTRY_PLAYERS,
+  DASHBOARD_LIVE_STATS,
+  INJURY_FORECASTS,
+  LIVE_MATCH_DATA,
+  LIVE_MATCH_EVENTS,
+  LIVE_MATCH_PLAYERS,
+  PATTERNS_SUMMARY,
+  PLAYER_HEATMAPS,
+  PPI_PLAYERS,
+  PREDICTION_TEAMS,
+  TEAM_FATIGUE_BY_MIN,
+  TRAINING_BANNER,
+  TRANSFER_TARGETS,
+  VIDEO_AI_INSIGHTS,
+  VIDEO_HIGHLIGHTS,
+} from './data/analysteExtendedData';
+import { WHOOP_SQUAD } from './data/whoopData';
+
+export const ANALYSTE_MODULE_KEYS = [
+  'dashboard',
+  'executive',
+  'live-match',
+  'prediction-teams',
+  'ppi',
+  'chemistry',
+  'patterns',
+  'tactical',
+  'video-analysis',
+  'video-coach',
+  'replay',
+  'opponent',
+  'fatigue',
+  'whoop',
+  'injuries',
+  'injury-forecast',
+  'transfer',
+  'market-value',
+  'scouting',
+  'evolution',
+  'training',
+] as const;
+
+export type AnalysteModuleKey = (typeof ANALYSTE_MODULE_KEYS)[number];
+
+export function buildAnalyisteSeeds(clubName: string, analystName?: string) {
+  const info = {
+    ...ANALYSTE_INFO,
+    club: clubName,
+    name: analystName?.trim() || ANALYSTE_INFO.name,
+  };
+
+  return {
+    dashboard: {
+      info,
+      patterns: DETECTED_PATTERNS,
+      liveStats: DASHBOARD_LIVE_STATS,
+      tacticalCenter: AI_TACTICAL_CENTER,
+    },
+    executive: {
+      kpis: EXECUTIVE_KPIS,
+      recommendations: EXECUTIVE_AI_RECO,
+    },
+    'live-match': {
+      homeTeam: clubName,
+      awayTeam: 'EST',
+      score: { home: 1, away: 1 },
+      minute: 65,
+      minuteData: LIVE_MATCH_DATA,
+      events: LIVE_MATCH_EVENTS,
+      players: LIVE_MATCH_PLAYERS,
+    },
+    'prediction-teams': { teams: PREDICTION_TEAMS },
+    ppi: { players: PPI_PLAYERS },
+    chemistry: {
+      players: CHEMISTRY_PLAYERS,
+      matrix: CHEMISTRY_MATRIX,
+      nodePositions: CHEMISTRY_NODE_POSITIONS,
+    },
+    patterns: { patterns: DETECTED_PATTERNS, summary: PATTERNS_SUMMARY },
+    tactical: {
+      squad: DEFAULT_SQUAD,
+      bench: BENCH_PLAYERS,
+      suggestions: TACTICAL_SUGGESTIONS,
+      aiCenter: AI_TACTICAL_CENTER,
+    },
+    'video-analysis': {
+      matchTitle: `${clubName} vs EST — Match Footage`,
+      highlights: VIDEO_HIGHLIGHTS,
+      insights: VIDEO_AI_INSIGHTS,
+      events: MATCH_EVENTS,
+    },
+    'video-coach': { insights: VIDEO_COACH_INSIGHTS },
+    replay: { events: MATCH_EVENTS, videoDuration: 5400 },
+    opponent: { intel: OPPONENT_INTEL },
+    fatigue: {
+      intervals: ['0-15', '15-30', '30-45', '45-60', '60-75', '75-90'],
+      teamFatigue: TEAM_FATIGUE_BY_MIN,
+      playerHeatmaps: PLAYER_HEATMAPS,
+    },
+    whoop: { squad: WHOOP_SQUAD, defaultPlayerId: '2' },
+    injuries: { predictions: INJURY_PREDICTIONS },
+    'injury-forecast': { forecasts: INJURY_FORECASTS },
+    transfer: { transfers: TRANSFER_TARGETS },
+    'market-value': { values: MARKET_VALUES },
+    scouting: { compare: SCOUTING_COMPARE },
+    evolution: { forecasts: EVOLUTION_FORECASTS },
+    training: { plan: DEFAULT_TRAINING_PLAN, banner: TRAINING_BANNER },
+  } satisfies Record<AnalysteModuleKey, unknown>;
+}
