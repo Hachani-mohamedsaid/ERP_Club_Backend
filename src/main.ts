@@ -11,9 +11,25 @@ async function bootstrap() {
     .map((o) => o.trim())
     .filter(Boolean);
 
+  const allowLocalhost = process.env.CORS_ALLOW_LOCALHOST !== 'false';
+
   app.enableCors({
-    origin: frontendOrigins,
+    origin: (origin, callback) => {
+      // Requêtes sans Origin (curl, health checks)
+      if (!origin) return callback(null, true);
+      if (frontendOrigins.includes(origin)) return callback(null, true);
+      // Dev local — Vite peut utiliser 5173, 5174, 5175…
+      if (
+        allowLocalhost &&
+        /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
+      ) {
+        return callback(null, true);
+      }
+      callback(null, false);
+    },
     credentials: true,
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
   });
 
   app.useGlobalPipes(

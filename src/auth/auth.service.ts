@@ -20,6 +20,7 @@ import { JwtPayload } from './jwt-payload.interface';
 import { ClubMemberRole } from '@prisma/client';
 import { clubRoleToLabel } from '../club/permissions-seed';
 import { ensureSuperAdmin } from './super-admin.bootstrap';
+import { createTrialSubscription } from '../platform/platform.seed';
 
 @Injectable()
 export class AuthService implements OnModuleInit {
@@ -125,6 +126,13 @@ export class AuthService implements OnModuleInit {
         ownerEmail: user.email,
         ownerPhone: user.phone,
         officialEmail: user.email,
+      });
+
+      await createTrialSubscription(tx, organization.id);
+
+      await tx.user.update({
+        where: { id: user.id },
+        data: { organizationId: organization.id },
       });
 
       if (dto.invitationCode?.trim()) {

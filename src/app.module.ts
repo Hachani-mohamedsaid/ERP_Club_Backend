@@ -7,6 +7,7 @@ import { ClubModule } from './club/club.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { UsersModule } from './users/users.module';
+import { PlatformModule } from './platform/platform.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { UsersModule } from './users/users.module';
     ClubModule,
     OrganizationsModule,
     UsersModule,
+    PlatformModule,
   ],
   controllers: [AppController],
   providers: [AppService],

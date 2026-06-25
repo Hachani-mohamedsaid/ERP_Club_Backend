@@ -74,6 +74,40 @@ enum CalendarEventType {
   REUNION
 }
 
+enum OrganizationStatus {
+  TRIAL
+  ACTIVE
+  SUSPENDED
+  CANCELLED
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  EXPIRED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum SupportTicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+}
+
+enum SupportTicketPriority {
+  CRITICAL
+  HIGH
+  NORMAL
+}
+
 model User {
   id                 String          @id @default(uuid())
   email              String          @unique
@@ -99,6 +133,8 @@ model Organization {
   league          String
   logoUrl         String?
   invitationCode  String?
+  status          OrganizationStatus   @default(TRIAL)
+  trialEndsAt     DateTime?
   ownerId         String               @unique
   owner           User                 @relation("OrganizationOwner", fields: [ownerId], references: [id], onDelete: Cascade)
   authUsers       User[]               @relation("OrganizationMembers")
@@ -115,6 +151,9 @@ model Organization {
   calendarEvents  ClubCalendarEvent[]
   injuries        ClubInjury[]
   infrastructures ClubInfrastructure[]
+  subscription    OrganizationSubscription?
+  platformPayments PlatformPayment[]
+  supportTickets  PlatformSupportTicket[]
   createdAt       DateTime             @default(now())
   updatedAt       DateTime             @updatedAt
 }
@@ -325,5 +364,90 @@ model InvitationCode {
   isActive  Boolean  @default(true)
   maxUses   Int?
   usedCount Int      @default(0)
+  createdAt DateTime @default(now())
+}
+
+model Plan {
+  id            String                   @id @default(uuid())
+  code          String                   @unique
+  name          String
+  priceMonthly  Int
+  currency      String                   @default("TND")
+  features      String[]
+  isActive      Boolean                  @default(true)
+  sortOrder     Int                      @default(0)
+  subscriptions OrganizationSubscription[]
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
+}
+
+model OrganizationSubscription {
+  id                 String             @id @default(uuid())
+  organizationId     String             @unique
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  planId             String
+  plan               Plan               @relation(fields: [planId], references: [id])
+  status             SubscriptionStatus @default(TRIALING)
+  trialEndsAt        DateTime?
+  currentPeriodStart DateTime           @default(now())
+  currentPeriodEnd   DateTime
+  cancelledAt        DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+}
+
+model PlatformPayment {
+  id             String        @id @default(uuid())
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoiceNumber  String        @unique
+  amount         Int
+  currency       String        @default("TND")
+  method         String?
+  status         PaymentStatus @default(PENDING)
+  paidAt         DateTime?
+  periodStart    DateTime?
+  periodEnd      DateTime?
+  notes          String?
+  createdAt      DateTime      @default(now())
+}
+
+model PlatformSettings {
+  id              String   @id @default("default")
+  platformName    String   @default("ODIN ERP")
+  platformUrl     String   @default("https://odin.erp.tn")
+  contactEmail    String   @default("admin@odin.erp.tn")
+  supportPhone    String   @default("+216 71 000 000")
+  timezone        String   @default("Africa/Tunis")
+  defaultLanguage String   @default("fr")
+  currency        String   @default("TND")
+  maintenanceMode Boolean  @default(false)
+  openRegistration Boolean @default(true)
+  debugMode       Boolean  @default(false)
+  trialDays       Int      @default(14)
+  extendedSettings Json?
+  updatedAt       DateTime @updatedAt
+}
+
+model PlatformSupportTicket {
+  id             String                @id @default(uuid())
+  ticketNumber   String                @unique
+  organizationId String?
+  organization   Organization?         @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  clubName       String
+  subject        String
+  description    String?
+  priority       SupportTicketPriority @default(NORMAL)
+  status         SupportTicketStatus   @default(OPEN)
+  agentName      String?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+}
+
+model PlatformBlockedIp {
+  id        String   @id @default(uuid())
+  ipAddress String   @unique
+  reason    String
+  country   String?
   createdAt DateTime @default(now())
 }
