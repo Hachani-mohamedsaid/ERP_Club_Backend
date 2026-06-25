@@ -803,37 +803,99 @@ export class ClubService {
       where: { organizationId },
       orderBy: { entryDate: 'desc' },
     });
-    const revenue = entries.filter((e) => e.type === 'REVENUE').reduce((s, e) => s + e.amount, 0);
-    const expenses = entries.filter((e) => e.type === 'EXPENSE').reduce((s, e) => s + e.amount, 0);
+    const revenue = entries
+      .filter((e) => e.type === 'REVENUE')
+      .reduce((s, e) => s + e.amount, 0);
+    const expenses = entries
+      .filter((e) => e.type === 'EXPENSE')
+      .reduce((s, e) => s + e.amount, 0);
+    const profit = revenue - expenses;
+    const budget = revenue > 0 || expenses > 0 ? revenue + Math.max(0, profit) : 0;
+
+    const chartColors = ['#FF6B57', '#6366F1', '#22C55E', '#F59E0B', '#EC4899', '#06B6D4'];
+    const buildBreakdown = (type: 'REVENUE' | 'EXPENSE') => {
+      const filtered = entries.filter((e) => e.type === type);
+      const total = filtered.reduce((s, e) => s + e.amount, 0);
+      if (total === 0) return [];
+      const map = new Map<string, number>();
+      for (const e of filtered) {
+        map.set(e.category, (map.get(e.category) ?? 0) + e.amount);
+      }
+      return [...map.entries()].map(([name, amount], i) => ({
+        name,
+        value: Math.round((amount / total) * 100),
+        amount,
+        color: chartColors[i % chartColors.length],
+      }));
+    };
+
+    const monthLabels = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'];
+    const monthlyMap = new Map<string, { month: string; amount: number; sortKey: string }>();
+    for (const e of entries.filter((x) => x.type === 'EXPENSE')) {
+      const d = e.entryDate;
+      const sortKey = `${d.getFullYear()}-${String(d.getMonth()).padStart(2, '0')}`;
+      const month = monthLabels[d.getMonth()] ?? '—';
+      const prev = monthlyMap.get(sortKey);
+      monthlyMap.set(sortKey, {
+        month,
+        amount: (prev?.amount ?? 0) + e.amount,
+        sortKey,
+      });
+    }
+    const monthlyExpenses = [...monthlyMap.values()]
+      .sort((a, b) => a.sortKey.localeCompare(b.sortKey))
+      .slice(-6)
+      .map(({ month, amount }) => ({
+        month,
+        amount: Math.round(amount / 1000),
+      }));
+
     return {
-      kpis: {
-        budget: revenue,
-        expenses,
-        revenue,
-        profit: revenue - expenses,
-      },
+      kpis: { budget, expenses, revenue, profit },
+      revenueSources: buildBreakdown('REVENUE'),
+      expenseBreakdown: buildBreakdown('EXPENSE'),
+      monthlyExpenses,
       history: entries.map((e) => ({
+        id: e.id,
         date: e.entryDate.toLocaleDateString('fr-FR'),
         amount: e.type === 'EXPENSE' ? -e.amount : e.amount,
-        type: e.label,
-        category: e.type === 'EXPENSE' ? 'out' : 'in',
+        label: e.label,
+        category: e.category,
+        entryType: e.type,
       })),
     };
   }
 
   async createFinanceEntry(user: JwtPayload, data: Record<string, unknown>, ip?: string) {
     const organizationId = this.orgId(user);
+    const label = String(data.label ?? '').trim();
+    if (!label) {
+      throw new BadRequestException('Le libellé est requis.');
+    }
+    const amount = Number(data.amount ?? 0);
+    if (!amount || amount <= 0) {
+      throw new BadRequestException('Le montant doit être supérieur à 0.');
+    }
     await this.prisma.clubFinanceEntry.create({
       data: {
         organizationId,
-        label: String(data.label ?? ''),
-        amount: Number(data.amount ?? 0),
+        label,
+        amount,
         type: data.type === 'REVENUE' ? 'REVENUE' : 'EXPENSE',
         category: String(data.category ?? 'Général'),
         entryDate: data.entryDate ? new Date(String(data.entryDate)) : new Date(),
       },
     });
     await this.syncDashboardStats(organizationId);
+    await this.audit.log(organizationId, {
+      userName: user.fullName,
+      userRole: 'Club Admin',
+      action: 'Transaction financière',
+      entity: label,
+      details: `${data.type === 'REVENUE' ? 'Revenu' : 'Dépense'} — ${amount.toLocaleString('fr-FR')} DT`,
+      type: AuditActionType.CREATION,
+      ipAddress: ip,
+    });
     return this.listFinance(user);
   }
 
