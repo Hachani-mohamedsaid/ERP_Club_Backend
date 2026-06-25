@@ -157,6 +157,18 @@ export class ClubController {
     return this.club.deleteStaff(user, id);
   }
 
+  @Patch('staff/:id')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Equipes', 'update')
+  updateStaff(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @Req() req: Request,
+  ) {
+    return this.club.updateStaff(user, id, body, this.ip(req));
+  }
+
   @Get('finance')
   listFinance(@CurrentUser() user: JwtPayload) {
     return this.club.listFinance(user);

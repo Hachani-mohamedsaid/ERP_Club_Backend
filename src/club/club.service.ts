@@ -714,18 +714,79 @@ export class ClubService {
 
   async createStaff(user: JwtPayload, data: Record<string, unknown>, ip?: string) {
     const organizationId = this.orgId(user);
+    const fullName = String(data.fullName ?? '').trim();
+    if (!fullName) {
+      throw new BadRequestException('Le nom complet est requis.');
+    }
     const staff = await this.prisma.clubStaff.create({
       data: {
         organizationId,
-        fullName: String(data.fullName ?? '').trim(),
-        role: String(data.role ?? 'Coach'),
+        fullName,
+        role: this.normalizeStaffRole(String(data.role ?? 'Coach')),
         salaryMonthly: Number(data.salaryMonthly ?? 0),
         contractEnd: data.contractEnd ? new Date(String(data.contractEnd)) : null,
         isAvailable: data.isAvailable !== false,
       },
     });
     await this.syncDashboardStats(organizationId);
+    await this.audit.log(organizationId, {
+      userName: user.fullName,
+      userRole: 'Club Admin',
+      action: 'Ajout staff',
+      entity: staff.fullName,
+      details: `Rôle: ${staff.role}`,
+      type: AuditActionType.CREATION,
+      ipAddress: ip,
+    });
     return staff;
+  }
+
+  async updateStaff(user: JwtPayload, id: string, data: Record<string, unknown>, ip?: string) {
+    const organizationId = this.orgId(user);
+    const existing = await this.prisma.clubStaff.findFirst({ where: { id, organizationId } });
+    if (!existing) throw new NotFoundException('Membre staff introuvable.');
+
+    const staff = await this.prisma.clubStaff.update({
+      where: { id },
+      data: {
+        ...(data.fullName != null ? { fullName: String(data.fullName).trim() } : {}),
+        ...(data.role != null ? { role: this.normalizeStaffRole(String(data.role)) } : {}),
+        ...(data.salaryMonthly != null ? { salaryMonthly: Number(data.salaryMonthly) } : {}),
+        ...(data.contractEnd !== undefined
+          ? { contractEnd: data.contractEnd ? new Date(String(data.contractEnd)) : null }
+          : {}),
+        ...(data.isAvailable != null ? { isAvailable: Boolean(data.isAvailable) } : {}),
+      },
+    });
+    await this.syncDashboardStats(organizationId);
+    await this.audit.log(organizationId, {
+      userName: user.fullName,
+      userRole: 'Club Admin',
+      action: 'Modification staff',
+      entity: staff.fullName,
+      details: `Rôle: ${staff.role}`,
+      type: AuditActionType.MODIFICATION,
+      ipAddress: ip,
+    });
+    return staff;
+  }
+
+  private normalizeStaffRole(role: string): string {
+    const map: Record<string, string> = {
+      coach: 'Coach',
+      adjoint: 'Adjoint',
+      préparateur: 'Préparateur',
+      preparateur: 'Préparateur',
+      'préparateur physique': 'Préparateur',
+      médecin: 'Médecin',
+      medecin: 'Médecin',
+      scout: 'Scout',
+      kiné: 'Kiné',
+      kine: 'Kiné',
+      analyste: 'Analyste',
+    };
+    const key = role.trim().toLowerCase();
+    return map[key] ?? role.trim();
   }
 
   async deleteStaff(user: JwtPayload, id: string) {
