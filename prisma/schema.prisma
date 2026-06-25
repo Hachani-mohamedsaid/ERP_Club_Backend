@@ -222,6 +222,7 @@ model ClubPlayer {
   position       String
   age            Int          @default(0)
   ovr            Int          @default(0)
+  goals          Int          @default(0)
   marketValue    String       @default("0")
   salaryMonthly  Int          @default(0)
   status         PlayerStatus @default(DISPONIBLE)

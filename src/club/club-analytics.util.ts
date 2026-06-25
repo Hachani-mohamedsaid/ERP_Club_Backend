@@ -3,6 +3,7 @@ interface PlayerRow {
   fullName: string;
   position: string;
   ovr: number;
+  goals: number;
   status: string;
   radar: unknown;
 }
@@ -14,16 +15,16 @@ interface CalendarRow {
 
 const FORMATION_433 = [
   { slot: 'GB', aliases: ['GB', 'GK'], x: 50, y: 82 },
-  { slot: 'DD', aliases: ['DD', 'RB', 'LD'], x: 88, y: 62 },
+  { slot: 'DD', aliases: ['DD', 'RB'], x: 88, y: 62 },
   { slot: 'DC', aliases: ['DC', 'CB'], x: 65, y: 68 },
   { slot: 'DC', aliases: ['DC', 'CB'], x: 35, y: 68 },
   { slot: 'DG', aliases: ['DG', 'LB', 'LG'], x: 12, y: 62 },
-  { slot: 'MC', aliases: ['MC', 'MDF', 'MID'], x: 75, y: 45 },
+  { slot: 'MC', aliases: ['MC', 'MDF', 'CM'], x: 75, y: 45 },
   { slot: 'MOC', aliases: ['MOC', 'CAM', 'MO'], x: 50, y: 38 },
-  { slot: 'MC', aliases: ['MC', 'MDF', 'MID'], x: 25, y: 45 },
-  { slot: 'AD', aliases: ['AD', 'RW', 'AIL'], x: 80, y: 22 },
-  { slot: 'BU', aliases: ['BU', 'ST', 'CF', 'ATT'], x: 50, y: 12 },
-  { slot: 'AG', aliases: ['AG', 'LW', 'AIL'], x: 20, y: 22 },
+  { slot: 'MC', aliases: ['MC', 'MDF', 'CM'], x: 25, y: 45 },
+  { slot: 'AD', aliases: ['AD', 'RW'], x: 80, y: 22 },
+  { slot: 'BU', aliases: ['BU', 'ST', 'CF', 'ATT', 'FW'], x: 50, y: 12 },
+  { slot: 'AG', aliases: ['AG', 'LW'], x: 20, y: 22 },
 ];
 
 const MONTHS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'];
@@ -72,14 +73,26 @@ function shortName(fullName: string) {
 
 function positionMatches(playerPos: string, aliases: string[]) {
   const p = normPos(playerPos);
-  return aliases.some((a) => p === a || p.includes(a));
+  return aliases.some((a) => p === a);
 }
 
-function estimateGoals(position: string, ovr: number) {
-  const p = normPos(position);
-  if (/BU|ST|AG|AD|ATT|FW|CF/.test(p)) return Math.max(1, Math.round(ovr * 0.22));
-  if (/MOC|MC|MDF|MID|CM|CAM/.test(p)) return Math.max(0, Math.round(ovr * 0.08));
-  return Math.max(0, Math.round(ovr * 0.02));
+function buildBestXi(pool: PlayerRow[]) {
+  const slots = FORMATION_433.map((s) => ({ ...s, player: null as PlayerRow | null }));
+  const sorted = [...pool].sort((a, b) => b.ovr - a.ovr);
+
+  for (const player of sorted) {
+    const slotIdx = slots.findIndex(
+      (s) => !s.player && positionMatches(player.position, s.aliases),
+    );
+    if (slotIdx >= 0) slots[slotIdx].player = player;
+  }
+
+  return slots.map((s) => ({
+    name: s.player ? shortName(s.player.fullName) : '—',
+    position: s.slot,
+    x: s.x,
+    y: s.y,
+  }));
 }
 
 export function buildClubAnalytics(players: PlayerRow[], events: CalendarRow[]) {
@@ -96,20 +109,7 @@ export function buildClubAnalytics(players: PlayerRow[], events: CalendarRow[]) 
     { stat: 'Mental', value: avg(radars.map((r) => r.mental)) || 0 },
   ];
 
-  const used = new Set<string>();
-  const bestXiPlayers = FORMATION_433.map((slot) => {
-    const candidates = pool
-      .filter((p) => !used.has(p.id) && positionMatches(p.position, slot.aliases))
-      .sort((a, b) => b.ovr - a.ovr);
-    const pick = candidates[0] ?? pool.filter((p) => !used.has(p.id)).sort((a, b) => b.ovr - a.ovr)[0];
-    if (pick) used.add(pick.id);
-    return {
-      name: pick ? shortName(pick.fullName) : '—',
-      position: slot.slot,
-      x: slot.x,
-      y: slot.y,
-    };
-  });
+  const bestXiPlayers = buildBestXi(pool);
 
   const now = new Date();
   const seasonMonths = MONTHS.slice(0, 6).map((month, idx) => {
@@ -126,17 +126,12 @@ export function buildClubAnalytics(players: PlayerRow[], events: CalendarRow[]) 
   });
 
   const topScorers = [...players]
-    .map((p) => ({
-      name: p.fullName,
-      goals: estimateGoals(p.position, p.ovr),
-      ovr: p.ovr,
-    }))
-    .filter((p) => p.goals > 0)
+    .filter((p) => (p.goals ?? 0) > 0)
     .sort((a, b) => b.goals - a.goals || b.ovr - a.ovr)
     .slice(0, 3)
     .map((p, i) => ({
       rank: i + 1,
-      name: p.name,
+      name: p.fullName,
       goals: p.goals,
       medal: i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉',
     }));

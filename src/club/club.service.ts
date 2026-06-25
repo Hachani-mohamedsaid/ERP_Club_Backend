@@ -681,6 +681,7 @@ export class ClubService {
         position: String(data.position ?? 'MC'),
         age: Number(data.age ?? 0),
         ovr: Number(data.ovr ?? 0),
+        goals: Number(data.goals ?? 0),
         marketValue: String(data.marketValue ?? '0'),
         salaryMonthly: Number(data.salaryMonthly ?? 0),
         status: (data.status as never) ?? 'DISPONIBLE',
@@ -708,6 +709,7 @@ export class ClubService {
         ...(data.position != null ? { position: String(data.position) } : {}),
         ...(data.age != null ? { age: Number(data.age) } : {}),
         ...(data.ovr != null ? { ovr: Number(data.ovr) } : {}),
+        ...(data.goals != null ? { goals: Number(data.goals) } : {}),
         ...(data.marketValue != null ? { marketValue: String(data.marketValue) } : {}),
         ...(data.salaryMonthly != null ? { salaryMonthly: Number(data.salaryMonthly) } : {}),
         ...(data.status != null ? { status: data.status as never } : {}),
@@ -732,6 +734,7 @@ export class ClubService {
     position: string;
     age: number;
     ovr: number;
+    goals?: number;
     marketValue: string;
     salaryMonthly: number;
     status: string;
@@ -748,6 +751,7 @@ export class ClubService {
       position: p.position,
       age: p.age,
       ovr: p.ovr,
+      goals: p.goals ?? 0,
       marketValue: p.marketValue,
       contract: { salary: `${p.salaryMonthly.toLocaleString('fr-FR')} DT/mois` },
       availability: statusMap[p.status] ?? p.status,
