@@ -417,17 +417,35 @@ export class PreparateurService {
 
   // ─── Training Sessions ──────────────────────────────────────────
 
+  // Sessions lues/écrites dans ClubCalendarEvent (source unique avec le calendrier)
+  private sessionTypeToEventType(type: string) {
+    if (type === 'match') return 'MATCH';
+    if (type === 'mobilite' || type === 'repos') return 'RECUPERATION';
+    return 'ENTRAINEMENT';
+  }
+
+  private calendarToSession(r: { id: string; title: string; eventDate: Date; eventTime: string | null; extraData?: unknown }) {
+    const d = (r.extraData ?? {}) as Record<string, string>;
+    return {
+      id: r.id,
+      title: r.title,
+      type: d.sessionType ?? 'cardio',
+      date: r.eventDate.toISOString().split('T')[0],
+      time: r.eventTime ?? '09:00',
+      duration: d.duration ?? '60 min',
+      objective: d.objective ?? '',
+      exercises: d.exercises ?? '',
+      intensity: d.intensity ?? 'Moyenne',
+    };
+  }
+
   async getSessions(user: JwtPayload) {
     const organizationId = this.orgId(user);
-    const rows = await this.prisma.trainingSession.findMany({
+    const rows = await this.prisma.clubCalendarEvent.findMany({
       where: { organizationId },
-      orderBy: [{ date: 'asc' }, { time: 'asc' }],
+      orderBy: [{ eventDate: 'asc' }, { eventTime: 'asc' }],
     });
-    return rows.map(r => ({
-      id: r.id, title: r.title, type: r.type, date: r.date, time: r.time,
-      duration: r.duration, objective: r.objective, exercises: r.exercises ?? '',
-      intensity: r.intensity,
-    }));
+    return rows.map(r => this.calendarToSession(r));
   }
 
   async createSession(user: JwtPayload, body: {
@@ -435,12 +453,23 @@ export class PreparateurService {
     duration: string; objective: string; exercises?: string; intensity: string;
   }) {
     const organizationId = this.orgId(user);
-    const row = await this.prisma.trainingSession.create({
-      data: { organizationId, ...body },
+    const row = await this.prisma.clubCalendarEvent.create({
+      data: {
+        organizationId,
+        title: body.title,
+        eventDate: new Date(body.date),
+        eventTime: body.time,
+        eventType: this.sessionTypeToEventType(body.type) as never,
+        extraData: {
+          sessionType: body.type,
+          duration: body.duration,
+          objective: body.objective,
+          exercises: body.exercises ?? '',
+          intensity: body.intensity,
+        },
+      },
     });
-    return { id: row.id, title: row.title, type: row.type, date: row.date, time: row.time,
-      duration: row.duration, objective: row.objective, exercises: row.exercises ?? '',
-      intensity: row.intensity };
+    return this.calendarToSession(row);
   }
 
   async updateSession(user: JwtPayload, id: string, body: Partial<{
@@ -448,19 +477,33 @@ export class PreparateurService {
     duration: string; objective: string; exercises: string; intensity: string;
   }>) {
     const organizationId = this.orgId(user);
-    const existing = await this.prisma.trainingSession.findFirst({ where: { id, organizationId } });
+    const existing = await this.prisma.clubCalendarEvent.findFirst({ where: { id, organizationId } });
     if (!existing) throw new NotFoundException('Séance introuvable.');
-    const row = await this.prisma.trainingSession.update({ where: { id }, data: body });
-    return { id: row.id, title: row.title, type: row.type, date: row.date, time: row.time,
-      duration: row.duration, objective: row.objective, exercises: row.exercises ?? '',
-      intensity: row.intensity };
+    const prev = (existing.extraData ?? {}) as Record<string, string>;
+    const row = await this.prisma.clubCalendarEvent.update({
+      where: { id },
+      data: {
+        ...(body.title && { title: body.title }),
+        ...(body.date  && { eventDate: new Date(body.date) }),
+        ...(body.time  && { eventTime: body.time }),
+        ...(body.type  && { eventType: this.sessionTypeToEventType(body.type) as never }),
+        extraData: {
+          sessionType: body.type      ?? prev.sessionType ?? 'cardio',
+          duration:    body.duration  ?? prev.duration    ?? '60 min',
+          objective:   body.objective ?? prev.objective   ?? '',
+          exercises:   body.exercises ?? prev.exercises   ?? '',
+          intensity:   body.intensity ?? prev.intensity   ?? 'Moyenne',
+        },
+      },
+    });
+    return this.calendarToSession(row);
   }
 
   async deleteSession(user: JwtPayload, id: string) {
     const organizationId = this.orgId(user);
-    const existing = await this.prisma.trainingSession.findFirst({ where: { id, organizationId } });
+    const existing = await this.prisma.clubCalendarEvent.findFirst({ where: { id, organizationId } });
     if (!existing) throw new NotFoundException('Séance introuvable.');
-    await this.prisma.trainingSession.delete({ where: { id } });
+    await this.prisma.clubCalendarEvent.delete({ where: { id } });
     return { deleted: true };
   }
 

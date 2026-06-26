@@ -255,6 +255,8 @@ model ClubCalendarEvent {
   eventTime      String?
   eventType      CalendarEventType @default(ENTRAINEMENT)
   location       String?
+  notes          String?
+  extraData      Json?
   createdAt      DateTime          @default(now())
   organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 }
