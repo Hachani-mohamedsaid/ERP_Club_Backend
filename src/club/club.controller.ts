@@ -221,6 +221,22 @@ export class ClubController {
     return this.club.createInjury(user, body);
   }
 
+  @Patch('injuries/:id')
+  @UseGuards(JwtAuthGuard)
+  updateInjury(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.updateInjury(user, id, body);
+  }
+
+  @Delete('injuries/:id')
+  @UseGuards(JwtAuthGuard)
+  deleteInjury(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.deleteInjury(user, id);
+  }
+
   @Get('analytics')
   getAnalytics(@CurrentUser() user: JwtPayload) {
     return this.club.getAnalytics(user);

@@ -1133,6 +1133,59 @@ export class ClubService {
     };
   }
 
+  async updateInjury(user: JwtPayload, id: string, data: Record<string, unknown>) {
+    const organizationId = this.orgId(user);
+    const injury = await this.prisma.clubInjury.findFirst({
+      where: { id, organizationId },
+    });
+    if (!injury) throw new NotFoundException('Blessure introuvable.');
+
+    const updated = await this.prisma.clubInjury.update({
+      where: { id },
+      data: {
+        ...(data.injuryType != null ? { injuryType: String(data.injuryType) } : {}),
+        ...(data.bodyPart !== undefined ? { bodyPart: String(data.bodyPart) } : {}),
+        ...(data.returnDate !== undefined
+          ? { returnDate: data.returnDate ? new Date(String(data.returnDate)) : null }
+          : {}),
+        ...(data.riskScore !== undefined ? { riskScore: Number(data.riskScore) } : {}),
+      },
+    });
+
+    return {
+      id: updated.id,
+      name: updated.playerName,
+      injury: updated.injuryType,
+      bodyPart: updated.bodyPart,
+      returnDate: updated.returnDate?.toLocaleDateString('fr-FR') ?? '—',
+      riskIA: updated.riskScore,
+    };
+  }
+
+  async deleteInjury(user: JwtPayload, id: string) {
+    const organizationId = this.orgId(user);
+    const injury = await this.prisma.clubInjury.findFirst({
+      where: { id, organizationId },
+    });
+    if (!injury) throw new NotFoundException('Blessure introuvable.');
+
+    await this.prisma.clubInjury.delete({ where: { id } });
+
+    if (injury.playerName) {
+      const remaining = await this.prisma.clubInjury.count({
+        where: { organizationId, playerName: injury.playerName },
+      });
+      if (remaining === 0) {
+        await this.prisma.clubPlayer.updateMany({
+          where: { organizationId, fullName: injury.playerName },
+          data: { status: 'DISPONIBLE' },
+        });
+      }
+    }
+
+    return { message: 'Blessure supprimée.' };
+  }
+
   // ─── Analytics ─────────────────────────────────────────────────
   async getAnalytics(user: JwtPayload) {
     const organizationId = this.orgId(user);
