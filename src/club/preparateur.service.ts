@@ -937,6 +937,154 @@ export class PreparateurService {
     return reports;
   }
 
+  // ─── Notifications ─────────────────────────────────────────────
+  private async generateNotifications(organizationId: string) {
+    const [risks, loads, programs, wellnessEntries, players, recoverySessions] = await Promise.all([
+      this.prisma.injuryRisk.findMany({
+        where: { organizationId },
+        include: { player: { select: { fullName: true } } },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.playerLoad.findMany({
+        where: { organizationId },
+        include: { player: { select: { fullName: true } } },
+        orderBy: { sessionDate: 'desc' },
+      }),
+      this.prisma.trainingProgram.findMany({
+        where: { organizationId, status: { in: ['valide', 'refuse'] } },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.wellnessEntry.findMany({ where: { organizationId }, select: { playerId: true } }),
+      this.prisma.clubPlayer.findMany({ where: { organizationId }, select: { id: true, fullName: true } }),
+      this.prisma.recoverySession.findMany({
+        where: { organizationId, status: 'Terminé' },
+        include: { player: { select: { fullName: true } } },
+        orderBy: { updatedAt: 'desc' },
+        take: 10,
+      }),
+    ]);
+
+    // Latest load per player
+    const latestLoadByPlayer = new Map<string, typeof loads[0]>();
+    for (const l of loads) {
+      if (!latestLoadByPlayer.has(l.playerId)) latestLoadByPlayer.set(l.playerId, l);
+    }
+
+    const upserts: Promise<unknown>[] = [];
+
+    // 1. InjuryRisk notifications
+    for (const r of risks) {
+      const priority = r.risk >= 70 ? 'haute' : r.risk >= 40 ? 'moyenne' : 'basse';
+      upserts.push(this.prisma.prepNotification.upsert({
+        where: { organizationId_sourceType_sourceId: { organizationId, sourceType: 'InjuryRisk', sourceId: r.id } },
+        create: {
+          organizationId, type: 'blessure', priority, isRead: false,
+          playerName: r.player.fullName, sourceType: 'InjuryRisk', sourceId: r.id,
+          title: `Risque blessure — ${r.player.fullName}`,
+          body: `Zone: ${r.zone} · Risque: ${r.risk}%${r.recommendation.length ? ' · ' + r.recommendation[0] : ''}`,
+        },
+        update: { title: `Risque blessure — ${r.player.fullName}`, body: `Zone: ${r.zone} · Risque: ${r.risk}%${r.recommendation.length ? ' · ' + r.recommendation[0] : ''}`, priority },
+      }));
+    }
+
+    // 2. PlayerLoad fatigue notifications (latest per player)
+    for (const [, l] of latestLoadByPlayer) {
+      if (l.fatigueScore < 60) continue;
+      const priority = l.fatigueScore >= 80 ? 'haute' : 'moyenne';
+      upserts.push(this.prisma.prepNotification.upsert({
+        where: { organizationId_sourceType_sourceId: { organizationId, sourceType: 'PlayerLoad', sourceId: l.id } },
+        create: {
+          organizationId, type: 'fatigue', priority, isRead: false,
+          playerName: l.player.fullName, sourceType: 'PlayerLoad', sourceId: l.id,
+          title: `Seuil fatigue dépassé — ${l.player.fullName}`,
+          body: `Fatigue à ${l.fatigueScore}%. Charge actuelle: ${l.loadScore}%. ${priority === 'haute' ? 'Réduire charge 20% demain.' : 'Surveillance conseillée.'}`,
+        },
+        update: {},
+      }));
+    }
+
+    // 3. TrainingProgram notifications
+    for (const p of programs) {
+      const isRefuse = p.status === 'refuse';
+      upserts.push(this.prisma.prepNotification.upsert({
+        where: { organizationId_sourceType_sourceId: { organizationId, sourceType: 'TrainingProgram', sourceId: p.id } },
+        create: {
+          organizationId, type: isRefuse ? 'programme_refuse' : 'validation_coach',
+          priority: isRefuse ? 'moyenne' : 'basse', isRead: false,
+          sourceType: 'TrainingProgram', sourceId: p.id,
+          title: isRefuse ? `Programme refusé — ${p.name}` : `Programme validé — ${p.name}`,
+          body: isRefuse ? `Le programme "${p.name}" a été refusé. Objectif: ${p.objective}.` : `Le programme "${p.name}" a été validé. Durée: ${p.duration}. Intensité: ${p.intensity}.`,
+        },
+        update: {},
+      }));
+    }
+
+    // 4. Wellness — players without entry
+    const filledIds = new Set(wellnessEntries.map(e => e.playerId));
+    const missingCount = players.filter(p => !filledIds.has(p.id)).length;
+    if (missingCount > 0) {
+      const aggId = `wellness-missing-${organizationId}`;
+      upserts.push(this.prisma.prepNotification.upsert({
+        where: { organizationId_sourceType_sourceId: { organizationId, sourceType: 'WellnessAggregate', sourceId: aggId } },
+        create: {
+          organizationId, type: 'wellness', priority: 'moyenne', isRead: false,
+          sourceType: 'WellnessAggregate', sourceId: aggId,
+          title: 'Questionnaire wellness non rempli',
+          body: `${missingCount} joueur${missingCount > 1 ? 's' : ''} n'${missingCount > 1 ? 'ont' : 'a'} pas encore rempli le questionnaire wellness pré-entraînement.`,
+        },
+        update: { title: 'Questionnaire wellness non rempli', body: `${missingCount} joueur${missingCount > 1 ? 's' : ''} n'${missingCount > 1 ? 'ont' : 'a'} pas encore rempli le questionnaire wellness pré-entraînement.` },
+      }));
+    }
+
+    // 5. RecoverySession Terminé notifications
+    for (const s of recoverySessions) {
+      upserts.push(this.prisma.prepNotification.upsert({
+        where: { organizationId_sourceType_sourceId: { organizationId, sourceType: 'RecoverySession', sourceId: s.id } },
+        create: {
+          organizationId, type: 'recuperation', priority: 'basse', isRead: false,
+          playerName: s.player.fullName, sourceType: 'RecoverySession', sourceId: s.id,
+          title: `Session récupération terminée — ${s.player.fullName}`,
+          body: `${s.method} · ${s.duration}. Statut: disponible.`,
+        },
+        update: {},
+      }));
+    }
+
+    await Promise.all(upserts);
+  }
+
+  async getNotifications(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    await this.generateNotifications(organizationId);
+    return this.prisma.prepNotification.findMany({
+      where: { organizationId },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async markNotificationRead(user: JwtPayload, id: string) {
+    const organizationId = this.orgId(user);
+    return this.prisma.prepNotification.update({
+      where: { id, organizationId },
+      data: { isRead: true },
+    });
+  }
+
+  async markAllNotificationsRead(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    await this.prisma.prepNotification.updateMany({
+      where: { organizationId, isRead: false },
+      data: { isRead: true },
+    });
+    return { success: true };
+  }
+
+  async deleteNotification(user: JwtPayload, id: string) {
+    const organizationId = this.orgId(user);
+    await this.prisma.prepNotification.delete({ where: { id, organizationId } });
+    return { id };
+  }
+
   // ─── Recovery ──────────────────────────────────────────────────
   async getRecoverySessions(user: JwtPayload) {
     const organizationId = this.orgId(user);

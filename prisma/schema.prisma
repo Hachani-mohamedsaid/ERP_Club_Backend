@@ -68,6 +68,7 @@ model Organization {
   matchReadiness   MatchReadiness[]
   wellnessEntries  WellnessEntry[]
   recoverySessions RecoverySession[]
+  prepNotifications PrepNotification[]
   sponsors         ClubSponsor[]
   invoices         ClubInvoice[]
   authUsers        User[]                    @relation("OrganizationMembers")
@@ -755,5 +756,23 @@ model RecoverySession {
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   player         ClubPlayer   @relation(fields: [playerId], references: [id], onDelete: Cascade)
 
+  @@index([organizationId])
+}
+
+model PrepNotification {
+  id             String       @id @default(uuid())
+  organizationId String
+  type           String
+  title          String
+  body           String
+  priority       String       @default("basse")
+  isRead         Boolean      @default(false)
+  playerName     String?
+  sourceType     String?
+  sourceId       String?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, sourceType, sourceId])
   @@index([organizationId])
 }

@@ -426,6 +426,26 @@ export class ClubController {
     return this.preparateur.getReports(user);
   }
 
+  @Get('preparateur/notifications')
+  getNotifications(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getNotifications(user);
+  }
+
+  @Patch('preparateur/notifications/read-all')
+  markAllNotificationsRead(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.markAllNotificationsRead(user);
+  }
+
+  @Patch('preparateur/notifications/:id/read')
+  markNotificationRead(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.preparateur.markNotificationRead(user, id);
+  }
+
+  @Delete('preparateur/notifications/:id')
+  deleteNotification(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.preparateur.deleteNotification(user, id);
+  }
+
   @Get('preparateur/recovery')
   getRecoverySessions(@CurrentUser() user: JwtPayload) {
     return this.preparateur.getRecoverySessions(user);
