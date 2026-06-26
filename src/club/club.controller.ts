@@ -238,7 +238,7 @@ export class ClubController {
     return this.club.createInfrastructure(user, body);
   }
 
-  // ─── Préparateur — Calendrier (même table que /club/calendar) ─
+  // ─── Préparateur — Calendrier ────────────────────────────────────
 
   @Get('preparateur/calendar')
   listPreparateurCalendar(@CurrentUser() user: JwtPayload) {
@@ -362,8 +362,6 @@ export class ClubController {
     return this.preparateur.updatePresence(user, playerId, body.status);
   }
 
-  // ─── Préparateur — Programmes ───────────────────────────────────
-
   // ─── Préparateur — Match Readiness ─────────────────────────────
 
   @Get('preparateur/match-readiness')
@@ -400,5 +398,290 @@ export class ClubController {
   @Delete('preparateur/programs/:id')
   deleteProgram(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.preparateur.deleteProgram(user, id);
+  }
+
+  // ─── Player Photo ────────────────────────────────────────────────
+
+  @Patch('players/:id/photo')
+  updatePlayerPhoto(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { photoUrl: string },
+  ) {
+    return this.club.updatePlayerPhoto(user, id, body.photoUrl);
+  }
+
+  // ─── Player Stats ─────────────────────────────────────────────────
+
+  @Get('players/:id/stats')
+  getPlayerStats(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.getPlayerStats(user, id);
+  }
+
+  @Patch('players/:id/stats')
+  updatePlayerStats(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.updatePlayerStats(user, id, body);
+  }
+
+  // ─── Player Physical Profile ────────────────────────────────────
+
+  @Patch('players/:id/physical')
+  updatePlayerPhysical(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.updatePlayerPhysical(user, id, body);
+  }
+
+  // ─── Player Appointment ─────────────────────────────────────────
+
+  @Post('players/:id/appointment')
+  bookAppointment(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.bookPlayerAppointment(user, id, body);
+  }
+
+  // ─── Player Contract ───────────────────────────────────────────
+
+  @Get('players/:id/contract')
+  getPlayerContract(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.getPlayerContract(user, id);
+  }
+
+  // ─── Match Stats ──────────────────────────────────────────────
+
+  @Get('players/:id/match-stats')
+  getMatchStats(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.getMatchStats(user, id);
+  }
+
+  @Post('players/:id/match-stats')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Joueurs', 'create')
+  createMatchStat(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.createMatchStat(user, id, body);
+  }
+
+  // ─── Awards ──────────────────────────────────────────────────
+
+  @Get('players/:id/awards')
+  getAwards(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.getAwards(user, id);
+  }
+
+  @Post('players/:id/awards')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Joueurs', 'create')
+  createAward(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.createAward(user, id, body);
+  }
+
+  @Delete('awards/:id')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Joueurs', 'delete')
+  deleteAward(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.deleteAward(user, id);
+  }
+
+  // ─── Documents ──────────────────────────────────────────────
+
+  @Get('players/:id/documents')
+  getDocuments(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.getDocuments(user, id);
+  }
+
+  @Get('documents/:id/file')
+  getDocumentFile(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.getDocumentFile(user, id);
+  }
+
+  @Post('players/:id/documents')
+  createDocument(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.createDocument(user, id, body);
+  }
+
+  @Delete('documents/:id')
+  deleteDocument(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.deleteDocument(user, id);
+  }
+
+  // ─── Transfers ──────────────────────────────────────────────
+
+  @Get('transfers')
+  getTransfers(@CurrentUser() user: JwtPayload) {
+    return this.club.getTransfers(user);
+  }
+
+  @Post('transfers')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Joueurs', 'create')
+  createTransfer(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
+    return this.club.createTransfer(user, body);
+  }
+
+  @Delete('transfers/:id')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Joueurs', 'delete')
+  deleteTransfer(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.deleteTransfer(user, id);
+  }
+
+  // ─── Chemistry ──────────────────────────────────────────────
+
+  @Get('chemistry')
+  getChemistry(@CurrentUser() user: JwtPayload) {
+    return this.club.getChemistry(user);
+  }
+
+  @Patch('chemistry/:id')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Joueurs', 'update')
+  updateChemistry(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { chemistry: number },
+  ) {
+    return this.club.updateChemistry(user, id, body.chemistry);
+  }
+
+  // ─── Finance CRUD extensions ────────────────────────────────
+
+  @Patch('finance/:id')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Finances', 'update')
+  updateFinanceEntry(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.updateFinanceEntry(user, id, body);
+  }
+
+  @Delete('finance/:id')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Finances', 'delete')
+  deleteFinanceEntry(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.deleteFinanceEntry(user, id);
+  }
+
+  @Post('finance/seed')
+  seedFinance(@CurrentUser() user: JwtPayload) {
+    return this.club.seedFinanceDataIfEmpty(user);
+  }
+
+  @Get('finance/report')
+  getFinanceReport(@CurrentUser() user: JwtPayload) {
+    return this.club.getFinanceReport(user);
+  }
+
+  // ─── Contracts CRUD extensions ──────────────────────────────
+
+  @Patch('contracts/:id')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Contrats', 'update')
+  updateContract(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.updateContract(user, id, body);
+  }
+
+  @Delete('contracts/:id')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Contrats', 'delete')
+  deleteContract(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.deleteContract(user, id);
+  }
+
+  // ─── Sponsors ───────────────────────────────────────────────
+
+  @Get('sponsors')
+  listSponsors(@CurrentUser() user: JwtPayload) {
+    return this.club.listSponsors(user);
+  }
+
+  @Post('sponsors')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Finances', 'create')
+  createSponsor(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
+    return this.club.createSponsor(user, body);
+  }
+
+  @Patch('sponsors/:id')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Finances', 'update')
+  updateSponsor(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.updateSponsor(user, id, body);
+  }
+
+  @Delete('sponsors/:id')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Finances', 'delete')
+  deleteSponsor(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.deleteSponsor(user, id);
+  }
+
+  // ─── Invoices ───────────────────────────────────────────────
+
+  @Get('invoices')
+  listInvoices(@CurrentUser() user: JwtPayload) {
+    return this.club.listInvoices(user);
+  }
+
+  @Post('invoices')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Finances', 'create')
+  createInvoice(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
+    return this.club.createInvoice(user, body);
+  }
+
+  @Patch('invoices/:id')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Finances', 'update')
+  updateInvoice(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.updateInvoice(user, id, body);
+  }
+
+  @Patch('invoices/:id/pay')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Finances', 'update')
+  markInvoicePaid(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.markInvoicePaid(user, id);
+  }
+
+  @Delete('invoices/:id')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Finances', 'delete')
+  deleteInvoice(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.deleteInvoice(user, id);
   }
 }

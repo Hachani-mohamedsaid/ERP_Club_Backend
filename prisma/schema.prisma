@@ -66,6 +66,8 @@ model Organization {
   sessionPresences SessionPresence[]
   trainingPrograms TrainingProgram[]
   matchReadiness   MatchReadiness[]
+  sponsors         ClubSponsor[]
+  invoices         ClubInvoice[]
   authUsers        User[]                    @relation("OrganizationMembers")
 }
 
@@ -394,7 +396,7 @@ model PlatformBlockedIp {
 }
 
 model PlayerAward {
-  id             String       @id
+  id             String       @id @default(uuid())
   organizationId String
   playerId       String
   title          String
@@ -413,7 +415,7 @@ model PlayerAward {
 }
 
 model PlayerChemistry {
-  id             String       @id
+  id             String       @id @default(uuid())
   organizationId String
   player1Id      String
   player1Name    String
@@ -428,7 +430,7 @@ model PlayerChemistry {
 }
 
 model PlayerDocument {
-  id             String       @id
+  id             String       @id @default(uuid())
   organizationId String
   playerId       String
   name           String
@@ -444,7 +446,7 @@ model PlayerDocument {
 }
 
 model PlayerMatchStat {
-  id             String       @id
+  id             String       @id @default(uuid())
   organizationId String
   playerId       String
   matchDate      DateTime
@@ -470,7 +472,7 @@ model PlayerMatchStat {
 }
 
 model PlayerTransfer {
-  id             String       @id
+  id             String       @id @default(uuid())
   organizationId String
   playerName     String
   transferType   String
@@ -681,4 +683,38 @@ model MatchReadiness {
 
   @@unique([organizationId, playerId])
   @@index([organizationId])
+}
+
+model ClubSponsor {
+  id                 String       @id @default(uuid())
+  organizationId     String
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  nom                String
+  logo               String       @default("🤝")
+  secteur            String       @default("Partenaire")
+  montant            Int          @default(0)
+  startDate          DateTime     @default(now())
+  endDate            DateTime
+  renewalProbability Int          @default(50)
+  status             String       @default("Actif")
+  contact            String?
+  notes              String?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+}
+
+model ClubInvoice {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  reference      String
+  fournisseur    String
+  invoiceType    String       @default("Fournisseur")
+  montant        Int          @default(0)
+  invoiceDate    DateTime     @default(now())
+  dueDate        DateTime?
+  status         String       @default("En attente")
+  description    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
 }
