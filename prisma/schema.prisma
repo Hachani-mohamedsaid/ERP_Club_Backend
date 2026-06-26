@@ -287,6 +287,12 @@ model ClubPlayer {
   radar          Json?
   photoUrl       String?
   stats          Json?
+  height         String?
+  weight         String?
+  strongFoot     String?      @default("Droit")
+  birthDate      String?
+  jerseyNumber   Int?         @default(0)
+  nationality    String?      @default("Tunisie")
   linkedMember   ClubMember?
   matchStats     PlayerMatchStat[]
   awards         PlayerAward[]
@@ -313,6 +319,8 @@ model PlayerMatchStat {
   passAccuracy   Int          @default(0)
   topSpeed       Float        @default(0)
   keyPasses      Int          @default(0)
+  yellowCards    Int          @default(0)
+  redCards       Int          @default(0)
   heatmapData    Json?
   createdAt      DateTime     @default(now())
 

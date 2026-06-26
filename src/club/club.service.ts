@@ -738,6 +738,15 @@ export class ClubService {
     marketValue: string;
     salaryMonthly: number;
     status: string;
+    radar?: unknown;
+    photoUrl?: string | null;
+    stats?: unknown;
+    height?: string | null;
+    weight?: string | null;
+    strongFoot?: string | null;
+    birthDate?: string | null;
+    jerseyNumber?: number | null;
+    nationality?: string | null;
   }) {
     const statusMap: Record<string, string> = {
       DISPONIBLE: 'Disponible',
@@ -745,20 +754,30 @@ export class ClubService {
       LIMITE: 'Limité',
       FIN_CONTRAT: 'Fin contrat',
     };
+    const defaultRadar = { speed: 70, shooting: 70, passing: 70, dribbling: 70, defending: 70, physical: 70, vision: 70 };
+    const dbRadar = (p.radar && typeof p.radar === 'object') ? p.radar as Record<string, number> : null;
     return {
       id: p.id,
       name: p.fullName,
       position: p.position,
+      positionFull: p.position,
       age: p.age,
       ovr: p.ovr,
       goals: p.goals ?? 0,
       marketValue: p.marketValue,
       contract: { salary: `${p.salaryMonthly.toLocaleString('fr-FR')} DT/mois` },
       availability: statusMap[p.status] ?? p.status,
-      radar: { pace: 70, shooting: 70, passing: 70, dribbling: 70, defending: 70, physical: 70 },
+      radar: dbRadar ?? defaultRadar,
+      photoUrl: p.photoUrl ?? null,
+      stats: p.stats ?? null,
+      height: p.height ?? '',
+      weight: p.weight ?? '',
+      strongFoot: p.strongFoot ?? 'Droit',
+      birthDate: p.birthDate ?? '',
+      jerseyNumber: p.jerseyNumber ?? 0,
+      nationality: p.nationality ?? 'Tunisie',
       performanceHistory: [],
       matches: [],
-      positionFull: p.position,
     };
   }
 
@@ -1033,6 +1052,24 @@ export class ClubService {
     });
   }
 
+  async bookPlayerAppointment(user: JwtPayload, playerId: string, data: Record<string, unknown>) {
+    const organizationId = this.orgId(user);
+    const player = await this.prisma.clubPlayer.findFirst({ where: { id: playerId, organizationId } });
+    const playerName = player?.name ?? 'Joueur';
+    const appointmentType = String(data.appointmentType ?? 'Bilan médical');
+    const requestedDate = data.requestedDate ? new Date(String(data.requestedDate)) : (() => { const d = new Date(); d.setDate(d.getDate() + 7); return d; })();
+    return this.prisma.clubCalendarEvent.create({
+      data: {
+        organizationId,
+        title: `${appointmentType} — ${playerName}`,
+        eventDate: requestedDate,
+        eventTime: String(data.requestedTime ?? '09:00'),
+        eventType: 'MEDICAL',
+        location: String(data.location ?? 'Infirmerie du club'),
+      },
+    });
+  }
+
   // ─── Injuries ──────────────────────────────────────────────────
   async listInjuries(user: JwtPayload) {
     const organizationId = this.orgId(user);
@@ -1232,6 +1269,50 @@ export class ClubService {
     return merged;
   }
 
+  async updatePlayerPhysical(user: JwtPayload, playerId: string, data: Record<string, unknown>) {
+    const organizationId = this.orgId(user);
+    const player = await this.prisma.clubPlayer.findFirst({
+      where: { id: playerId, organizationId },
+    });
+    if (!player) throw new NotFoundException('Joueur introuvable.');
+    const allowed: Record<string, unknown> = {};
+    if (data.height !== undefined) allowed['height'] = String(data.height);
+    if (data.weight !== undefined) allowed['weight'] = String(data.weight);
+    if (data.strongFoot !== undefined) allowed['strongFoot'] = String(data.strongFoot);
+    if (data.birthDate !== undefined) allowed['birthDate'] = String(data.birthDate);
+    if (data.jerseyNumber !== undefined) allowed['jerseyNumber'] = Number(data.jerseyNumber);
+    if (data.nationality !== undefined) allowed['nationality'] = String(data.nationality);
+    const updated = await this.prisma.clubPlayer.update({
+      where: { id: playerId },
+      data: allowed as never,
+    });
+    return this.formatPlayer(updated);
+  }
+
+  async getPlayerContract(user: JwtPayload, playerId: string) {
+    const organizationId = this.orgId(user);
+    const player = await this.prisma.clubPlayer.findFirst({
+      where: { id: playerId, organizationId },
+    });
+    if (!player) throw new NotFoundException('Joueur introuvable.');
+    const contract = await this.prisma.clubContract.findFirst({
+      where: {
+        organizationId,
+        holderName: { contains: player.fullName, mode: 'insensitive' },
+      },
+      orderBy: { endDate: 'desc' },
+    });
+    if (!contract) return null;
+    return {
+      id: contract.id,
+      startDate: contract.startDate.toISOString().split('T')[0],
+      endDate: contract.endDate.toISOString().split('T')[0],
+      salary: `${contract.salaryMonthly.toLocaleString('fr-FR')} DT/mois`,
+      releaseClause: contract.releaseClause ?? '—',
+      consumedPct: contract.consumedPct,
+    };
+  }
+
   private seedPlayerStats(player: { ovr: number; goals: number; fullName: string }) {
     const ovr = player.ovr || 75;
     const base = Math.max(60, ovr - 10);
@@ -1301,6 +1382,8 @@ export class ClubService {
         passAccuracy: Number(data.passAccuracy ?? 0),
         topSpeed: Number(data.topSpeed ?? 0),
         keyPasses: Number(data.keyPasses ?? 0),
+        yellowCards: Number(data.yellowCards ?? 0),
+        redCards: Number(data.redCards ?? 0),
         heatmapData: (data.heatmapData as never) ?? null,
       },
     });
@@ -1328,6 +1411,8 @@ export class ClubService {
         passAccuracy: Math.round(72 + Math.random() * 20),
         topSpeed: +(30 + Math.random() * 5).toFixed(1),
         keyPasses: Math.round(Math.random() * 4),
+        yellowCards: Math.random() > 0.7 ? 1 : 0,
+        redCards: Math.random() > 0.95 ? 1 : 0,
         heatmapData: Prisma.JsonNull,
       };
     });
