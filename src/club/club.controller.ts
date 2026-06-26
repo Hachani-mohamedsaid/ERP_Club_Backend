@@ -361,4 +361,44 @@ export class ClubController {
   ) {
     return this.preparateur.updatePresence(user, playerId, body.status);
   }
+
+  // ─── Préparateur — Programmes ───────────────────────────────────
+
+  // ─── Préparateur — Match Readiness ─────────────────────────────
+
+  @Get('preparateur/match-readiness')
+  getMatchReadiness(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getMatchReadiness(user);
+  }
+
+  @Patch('preparateur/match-readiness/:playerId')
+  updateMatchReadiness(
+    @CurrentUser() user: JwtPayload,
+    @Param('playerId') playerId: string,
+    @Body() body: { readinessStatus: string },
+  ) {
+    return this.preparateur.updateMatchReadiness(user, playerId, body.readinessStatus);
+  }
+
+  // ─── Préparateur — Programmes ───────────────────────────────────
+
+  @Get('preparateur/programs')
+  getPrograms(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getPrograms(user);
+  }
+
+  @Post('preparateur/programs')
+  createProgram(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
+    return this.preparateur.createProgram(user, body as never);
+  }
+
+  @Patch('preparateur/programs/:id')
+  updateProgram(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.preparateur.updateProgram(user, id, body as never);
+  }
+
+  @Delete('preparateur/programs/:id')
+  deleteProgram(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.preparateur.deleteProgram(user, id);
+  }
 }

@@ -507,6 +507,164 @@ export class PreparateurService {
     return { deleted: true };
   }
 
+  // ─── Training Programs ──────────────────────────────────────────
+
+  async getPrograms(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const [rows, players] = await Promise.all([
+      this.prisma.trainingProgram.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.clubPlayer.findMany({
+        where: { organizationId },
+        select: { id: true, fullName: true },
+      }),
+    ]);
+    const nameMap = new Map(players.map(p => [p.id, p.fullName]));
+    return rows.map(r => ({
+      id: r.id,
+      name: r.name,
+      objective: r.objective,
+      duration: r.duration,
+      intensity: r.intensity,
+      status: r.status,
+      createdAt: r.createdAt.toISOString().split('T')[0],
+      assignedPlayers: r.playerIds.map(pid => nameMap.get(pid) ?? pid),
+      playerIds: r.playerIds,
+    }));
+  }
+
+  async createProgram(user: JwtPayload, body: {
+    name: string; objective?: string; duration?: string;
+    intensity?: string; playerIds?: string[];
+  }) {
+    const organizationId = this.orgId(user);
+    const row = await this.prisma.trainingProgram.create({
+      data: {
+        organizationId,
+        name: body.name,
+        objective: body.objective ?? '',
+        duration: body.duration ?? '4 semaines',
+        intensity: body.intensity ?? 'Moyenne',
+        playerIds: body.playerIds ?? [],
+        status: 'brouillon',
+      },
+    });
+    const players = await this.prisma.clubPlayer.findMany({
+      where: { id: { in: row.playerIds }, organizationId },
+      select: { id: true, fullName: true },
+    });
+    const nameMap = new Map(players.map(p => [p.id, p.fullName]));
+    return {
+      id: row.id, name: row.name, objective: row.objective, duration: row.duration,
+      intensity: row.intensity, status: row.status,
+      createdAt: row.createdAt.toISOString().split('T')[0],
+      assignedPlayers: row.playerIds.map(pid => nameMap.get(pid) ?? pid),
+      playerIds: row.playerIds,
+    };
+  }
+
+  async updateProgram(user: JwtPayload, id: string, body: Partial<{
+    name: string; objective: string; duration: string;
+    intensity: string; playerIds: string[]; status: string;
+  }>) {
+    const organizationId = this.orgId(user);
+    const existing = await this.prisma.trainingProgram.findFirst({ where: { id, organizationId } });
+    if (!existing) throw new NotFoundException('Programme introuvable.');
+    const row = await this.prisma.trainingProgram.update({ where: { id }, data: body });
+    const players = await this.prisma.clubPlayer.findMany({
+      where: { id: { in: row.playerIds }, organizationId },
+      select: { id: true, fullName: true },
+    });
+    const nameMap = new Map(players.map(p => [p.id, p.fullName]));
+    return {
+      id: row.id, name: row.name, objective: row.objective, duration: row.duration,
+      intensity: row.intensity, status: row.status,
+      createdAt: row.createdAt.toISOString().split('T')[0],
+      assignedPlayers: row.playerIds.map(pid => nameMap.get(pid) ?? pid),
+      playerIds: row.playerIds,
+    };
+  }
+
+  async deleteProgram(user: JwtPayload, id: string) {
+    const organizationId = this.orgId(user);
+    const existing = await this.prisma.trainingProgram.findFirst({ where: { id, organizationId } });
+    if (!existing) throw new NotFoundException('Programme introuvable.');
+    await this.prisma.trainingProgram.delete({ where: { id } });
+    return { deleted: true };
+  }
+
+  // ─── Match Readiness ────────────────────────────────────────────
+
+  async getMatchReadiness(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+
+    const [players, loads, risks, readiness] = await Promise.all([
+      this.prisma.clubPlayer.findMany({
+        where: { organizationId },
+        orderBy: { fullName: 'asc' },
+        select: { id: true, fullName: true, position: true, photoUrl: true },
+      }),
+      this.prisma.playerLoad.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+        select: { playerId: true, fatigueScore: true },
+      }),
+      this.prisma.injuryRisk.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+        select: { playerId: true, risk: true },
+      }),
+      this.prisma.matchReadiness.findMany({
+        where: { organizationId },
+        select: { playerId: true, status: true },
+      }),
+    ]);
+
+    // keep only latest load per player
+    const loadMap = new Map<string, number>();
+    for (const l of loads) {
+      if (!loadMap.has(l.playerId)) loadMap.set(l.playerId, l.fatigueScore);
+    }
+    // keep only highest risk per player
+    const riskMap = new Map<string, number>();
+    for (const r of risks) {
+      if (!riskMap.has(r.playerId) || r.risk > (riskMap.get(r.playerId) ?? 0)) {
+        riskMap.set(r.playerId, r.risk);
+      }
+    }
+    const readinessMap = new Map(readiness.map(r => [r.playerId, r.status]));
+
+    return players.map(p => {
+      const fatigue = loadMap.get(p.id) ?? 30;
+      const fitness = Math.max(0, Math.min(100, 100 - fatigue));
+      const risk    = riskMap.get(p.id) ?? 0;
+      return {
+        id:              p.id,
+        name:            p.fullName,
+        position:        p.position,
+        photoUrl:        (p as { photoUrl?: string | null }).photoUrl ?? null,
+        fitness,
+        fatigue,
+        risk,
+        readinessStatus: readinessMap.get(p.id) ?? 'pending',
+      };
+    });
+  }
+
+  async updateMatchReadiness(user: JwtPayload, playerId: string, status: string) {
+    const organizationId = this.orgId(user);
+    const player = await this.prisma.clubPlayer.findFirst({ where: { id: playerId, organizationId } });
+    if (!player) throw new NotFoundException('Joueur introuvable.');
+    const row = await this.prisma.matchReadiness.upsert({
+      where: { organizationId_playerId: { organizationId, playerId } },
+      create: { organizationId, playerId, status },
+      update: { status },
+    });
+    return { id: row.id, playerId: row.playerId, readinessStatus: row.status };
+  }
+
   // ─── Session Presence ───────────────────────────────────────────
 
   async getPresence(user: JwtPayload) {
