@@ -811,12 +811,12 @@ export class PreparateurService {
     const [players, allLoads, risks, wellnessEntries] = await Promise.all([
       this.prisma.clubPlayer.findMany({
         where: { organizationId },
-        select: { id: true, fullName: true, position: true, photoUrl: true },
+        select: { id: true, fullName: true, position: true, photoUrl: true, status: true },
         orderBy: { fullName: 'asc' },
       }),
       this.prisma.playerLoad.findMany({
         where: { organizationId },
-        orderBy: { createdAt: 'desc' },
+        orderBy: { sessionDate: 'desc' },
       }),
       this.prisma.injuryRisk.findMany({
         where: { organizationId },
@@ -855,20 +855,25 @@ export class PreparateurService {
       const latest  = loads[0];
       const wellness = wellnessMap.get(p.id);
 
-      // Charge: from PlayerLoad; fallback 0
-      const charge = latest?.loadScore ?? 0;
+      // Apply same defaults as getChargeEquipe when no PlayerLoad exists
+      const { load: defLoad, fatigue: defFatigue, recovery: defRecovery } =
+        this.defaultScores(p.status ?? 'ACTIF');
 
-      // Fatigue: merge PlayerLoad + Wellness (wellness.fatigue is 1-10, scale to 0-100)
-      const loadFatigue    = latest?.fatigueScore ?? null;
+      // Charge: from PlayerLoad; fallback by player status (same as Charge Équipe)
+      const charge = latest?.loadScore ?? defLoad;
+
+      // Fatigue: merge PlayerLoad/default + Wellness (wellness.fatigue is 1-10, scale to 0-100)
+      const loadFatigue     = latest?.fatigueScore ?? defFatigue;
       const wellnessFatigue = wellness ? wellness.fatigue * 10 : null;
-      const fatigue = loadFatigue !== null && wellnessFatigue !== null
+      const fatigue = wellnessFatigue !== null
         ? Math.round((loadFatigue + wellnessFatigue) / 2)
-        : (loadFatigue ?? wellnessFatigue ?? 0);
+        : loadFatigue;
 
-      // Endurance: from PlayerLoad recoveryScore; fallback wellness humeur×10
-      const endurance = latest?.recoveryScore
-        ? Math.round(Math.min(100, latest.recoveryScore))
-        : (wellness ? wellness.humeur * 10 : 0);
+      // Endurance: from PlayerLoad recoveryScore/default; blend wellness humeur×10 if available
+      const baseEndurance = latest?.recoveryScore ?? defRecovery;
+      const endurance = wellness
+        ? Math.round((baseEndurance + wellness.humeur * 10) / 2)
+        : baseEndurance;
 
       // Wellness score (0-100)
       const wScore = wellnessScore(wellness);
