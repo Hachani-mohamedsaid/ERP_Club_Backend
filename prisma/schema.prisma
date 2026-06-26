@@ -541,6 +541,7 @@ enum CalendarEventType {
   ENTRAINEMENT
   MEDICAL
   REUNION
+  RECUPERATION
 }
 
 enum OrganizationStatus {

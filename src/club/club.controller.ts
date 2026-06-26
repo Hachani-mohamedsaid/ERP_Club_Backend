@@ -238,6 +238,18 @@ export class ClubController {
     return this.club.createInfrastructure(user, body);
   }
 
+  // ─── Préparateur — Calendrier (même table que /club/calendar) ─
+
+  @Get('preparateur/calendar')
+  listPreparateurCalendar(@CurrentUser() user: JwtPayload) {
+    return this.club.listCalendarEvents(user);
+  }
+
+  @Post('preparateur/calendar')
+  createPreparateurCalendar(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
+    return this.club.createCalendarEvent(user, body);
+  }
+
   // ─── Préparateur — Condition Physique ─────────────────────────
 
   @Get('preparateur/condition')
