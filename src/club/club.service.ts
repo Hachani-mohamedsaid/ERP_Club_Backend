@@ -1396,7 +1396,7 @@ export class ClubService {
         keyPasses: Number(data.keyPasses ?? 0),
         yellowCards: Number(data.yellowCards ?? 0),
         redCards: Number(data.redCards ?? 0),
-        heatmapData: (data.heatmapData as never) ?? null,
+        heatmapData: (data.heatmapData ?? null) as never,
       },
     });
   }

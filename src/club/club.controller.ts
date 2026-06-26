@@ -16,13 +16,17 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { JwtPayload } from '../auth/jwt-payload.interface';
 import { ClubService } from './club.service';
+import { PreparateurService } from './preparateur.service';
 import { PermissionsGuard } from './guards/permissions.guard';
 import { RequirePermission } from './decorators/require-permission.decorator';
 
 @Controller('club')
 @UseGuards(JwtAuthGuard)
 export class ClubController {
-  constructor(private readonly club: ClubService) {}
+  constructor(
+    private readonly club: ClubService,
+    private readonly preparateur: PreparateurService,
+  ) {}
 
   private ip(req: Request) {
     return (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ?? req.ip;
@@ -234,7 +238,170 @@ export class ClubController {
     return this.club.createInfrastructure(user, body);
   }
 
+  // ─── Préparateur — Calendrier ────────────────────────────────────
+
+  @Get('preparateur/calendar')
+  listPreparateurCalendar(@CurrentUser() user: JwtPayload) {
+    return this.club.listCalendarEvents(user);
+  }
+
+  @Post('preparateur/calendar')
+  createPreparateurCalendar(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
+    return this.club.createCalendarEvent(user, body);
+  }
+
+  // ─── Préparateur — Condition Physique ─────────────────────────
+
+  @Get('preparateur/condition')
+  getPhysicalCondition(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getPhysicalCondition(user);
+  }
+
+  // ─── Préparateur — Dashboard ───────────────────────────────────
+
+  @Get('preparateur/dashboard')
+  getPreparateurDashboard(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getDashboard(user);
+  }
+
+  // ─── Préparateur — Charge Équipe ───────────────────────────────
+
+  @Get('preparateur/charge')
+  getChargeEquipe(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getChargeEquipe(user);
+  }
+
+  @Patch('preparateur/charge/:playerId/reduce')
+  reducePlayerLoad(@CurrentUser() user: JwtPayload, @Param('playerId') playerId: string) {
+    return this.preparateur.adjustPlayerLoad(user, playerId, -10);
+  }
+
+  @Patch('preparateur/charge/:playerId/increase')
+  increasePlayerLoad(@CurrentUser() user: JwtPayload, @Param('playerId') playerId: string) {
+    return this.preparateur.adjustPlayerLoad(user, playerId, +10);
+  }
+
+  @Put('preparateur/charge/:playerId')
+  setPlayerLoad(
+    @CurrentUser() user: JwtPayload,
+    @Param('playerId') playerId: string,
+    @Body() body: { loadScore: number; fatigueScore: number; recoveryScore?: number; notes?: string },
+  ) {
+    return this.preparateur.setPlayerLoad(user, playerId, body);
+  }
+
+  @Get('preparateur/charge/:playerId/history')
+  getPlayerLoadHistory(@CurrentUser() user: JwtPayload, @Param('playerId') playerId: string) {
+    return this.preparateur.getPlayerLoadHistory(user, playerId);
+  }
+
+  // ─── Préparateur — Risques Blessures ───────────────────────────
+
+  @Get('preparateur/injury-risks')
+  getInjuryRisks(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getInjuryRisks(user);
+  }
+
+  @Post('preparateur/injury-risks')
+  createInjuryRisk(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { playerId: string; zone: string; risk: number; recommendation: string[]; medicalComment?: string; medicalAuthor?: string },
+  ) {
+    return this.preparateur.createInjuryRisk(user, body);
+  }
+
+  @Patch('preparateur/injury-risks/:id')
+  updateInjuryRisk(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { zone?: string; risk?: number; recommendation?: string[]; medicalComment?: string; medicalAuthor?: string },
+  ) {
+    return this.preparateur.updateInjuryRisk(user, id, body);
+  }
+
+  @Delete('preparateur/injury-risks/:id')
+  deleteInjuryRisk(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.preparateur.deleteInjuryRisk(user, id);
+  }
+
+  // ─── Préparateur — Sessions ─────────────────────────────────────
+
+  @Get('preparateur/sessions')
+  getSessions(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getSessions(user);
+  }
+
+  @Post('preparateur/sessions')
+  createSession(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
+    return this.preparateur.createSession(user, body as never);
+  }
+
+  @Patch('preparateur/sessions/:id')
+  updateSession(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.preparateur.updateSession(user, id, body as never);
+  }
+
+  @Delete('preparateur/sessions/:id')
+  deleteSession(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.preparateur.deleteSession(user, id);
+  }
+
+  // ─── Préparateur — Présence ─────────────────────────────────────
+
+  @Get('preparateur/presence')
+  getPresence(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getPresence(user);
+  }
+
+  @Patch('preparateur/presence/:playerId')
+  updatePresence(
+    @CurrentUser() user: JwtPayload,
+    @Param('playerId') playerId: string,
+    @Body() body: { status: string },
+  ) {
+    return this.preparateur.updatePresence(user, playerId, body.status);
+  }
+
+  // ─── Préparateur — Match Readiness ─────────────────────────────
+
+  @Get('preparateur/match-readiness')
+  getMatchReadiness(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getMatchReadiness(user);
+  }
+
+  @Patch('preparateur/match-readiness/:playerId')
+  updateMatchReadiness(
+    @CurrentUser() user: JwtPayload,
+    @Param('playerId') playerId: string,
+    @Body() body: { readinessStatus: string },
+  ) {
+    return this.preparateur.updateMatchReadiness(user, playerId, body.readinessStatus);
+  }
+
+  // ─── Préparateur — Programmes ───────────────────────────────────
+
+  @Get('preparateur/programs')
+  getPrograms(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getPrograms(user);
+  }
+
+  @Post('preparateur/programs')
+  createProgram(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
+    return this.preparateur.createProgram(user, body as never);
+  }
+
+  @Patch('preparateur/programs/:id')
+  updateProgram(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.preparateur.updateProgram(user, id, body as never);
+  }
+
+  @Delete('preparateur/programs/:id')
+  deleteProgram(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.preparateur.deleteProgram(user, id);
+  }
+
   // ─── Player Photo ────────────────────────────────────────────────
+
   @Patch('players/:id/photo')
   updatePlayerPhoto(
     @CurrentUser() user: JwtPayload,
@@ -245,6 +412,7 @@ export class ClubController {
   }
 
   // ─── Player Stats ─────────────────────────────────────────────────
+
   @Get('players/:id/stats')
   getPlayerStats(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.club.getPlayerStats(user, id);
@@ -259,7 +427,8 @@ export class ClubController {
     return this.club.updatePlayerStats(user, id, body);
   }
 
-  // ─── Player Physical Profile (self-edit by joueur) ────────────────
+  // ─── Player Physical Profile ────────────────────────────────────
+
   @Patch('players/:id/physical')
   updatePlayerPhysical(
     @CurrentUser() user: JwtPayload,
@@ -269,7 +438,8 @@ export class ClubController {
     return this.club.updatePlayerPhysical(user, id, body);
   }
 
-  // ─── Player Appointment Request (joueur books medical appointment) ──
+  // ─── Player Appointment ─────────────────────────────────────────
+
   @Post('players/:id/appointment')
   bookAppointment(
     @CurrentUser() user: JwtPayload,
@@ -279,13 +449,15 @@ export class ClubController {
     return this.club.bookPlayerAppointment(user, id, body);
   }
 
-  // ─── Player Contract ───────────────────────────────────────────────
+  // ─── Player Contract ───────────────────────────────────────────
+
   @Get('players/:id/contract')
   getPlayerContract(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.club.getPlayerContract(user, id);
   }
 
-  // ─── Match Stats ──────────────────────────────────────────────────
+  // ─── Match Stats ──────────────────────────────────────────────
+
   @Get('players/:id/match-stats')
   getMatchStats(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.club.getMatchStats(user, id);
@@ -302,7 +474,8 @@ export class ClubController {
     return this.club.createMatchStat(user, id, body);
   }
 
-  // ─── Awards ───────────────────────────────────────────────────────
+  // ─── Awards ──────────────────────────────────────────────────
+
   @Get('players/:id/awards')
   getAwards(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.club.getAwards(user, id);
@@ -326,7 +499,8 @@ export class ClubController {
     return this.club.deleteAward(user, id);
   }
 
-  // ─── Documents ────────────────────────────────────────────────────
+  // ─── Documents ──────────────────────────────────────────────
+
   @Get('players/:id/documents')
   getDocuments(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.club.getDocuments(user, id);
@@ -351,7 +525,8 @@ export class ClubController {
     return this.club.deleteDocument(user, id);
   }
 
-  // ─── Transfers ────────────────────────────────────────────────────
+  // ─── Transfers ──────────────────────────────────────────────
+
   @Get('transfers')
   getTransfers(@CurrentUser() user: JwtPayload) {
     return this.club.getTransfers(user);
@@ -371,7 +546,8 @@ export class ClubController {
     return this.club.deleteTransfer(user, id);
   }
 
-  // ─── Chemistry ────────────────────────────────────────────────────
+  // ─── Chemistry ──────────────────────────────────────────────
+
   @Get('chemistry')
   getChemistry(@CurrentUser() user: JwtPayload) {
     return this.club.getChemistry(user);
@@ -388,7 +564,8 @@ export class ClubController {
     return this.club.updateChemistry(user, id, body.chemistry);
   }
 
-  // ─── Finance CRUD extensions ─────────────────────────────────────
+  // ─── Finance CRUD extensions ────────────────────────────────
+
   @Patch('finance/:id')
   @UseGuards(PermissionsGuard)
   @RequirePermission('Finances', 'update')
@@ -417,7 +594,8 @@ export class ClubController {
     return this.club.getFinanceReport(user);
   }
 
-  // ─── Contracts CRUD extensions ────────────────────────────────────
+  // ─── Contracts CRUD extensions ──────────────────────────────
+
   @Patch('contracts/:id')
   @UseGuards(PermissionsGuard)
   @RequirePermission('Contrats', 'update')
@@ -436,7 +614,8 @@ export class ClubController {
     return this.club.deleteContract(user, id);
   }
 
-  // ─── Sponsors ──────────────────────────────────────────────────────
+  // ─── Sponsors ───────────────────────────────────────────────
+
   @Get('sponsors')
   listSponsors(@CurrentUser() user: JwtPayload) {
     return this.club.listSponsors(user);
@@ -467,7 +646,8 @@ export class ClubController {
     return this.club.deleteSponsor(user, id);
   }
 
-  // ─── Invoices ──────────────────────────────────────────────────────
+  // ─── Invoices ───────────────────────────────────────────────
+
   @Get('invoices')
   listInvoices(@CurrentUser() user: JwtPayload) {
     return this.club.listInvoices(user);
