@@ -441,11 +441,20 @@ export class PreparateurService {
 
   async getSessions(user: JwtPayload) {
     const organizationId = this.orgId(user);
-    const rows = await this.prisma.clubCalendarEvent.findMany({
-      where: { organizationId },
-      orderBy: [{ eventDate: 'asc' }, { eventTime: 'asc' }],
-    });
-    return rows.map(r => this.calendarToSession(r));
+    const [rows, playerCount] = await Promise.all([
+      this.prisma.clubCalendarEvent.findMany({
+        where: { organizationId },
+        orderBy: [{ eventDate: 'desc' }, { eventTime: 'asc' }],
+      }),
+      this.prisma.clubPlayer.count({ where: { organizationId } }),
+    ]);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return rows.map(r => ({
+      ...this.calendarToSession(r),
+      status: r.eventDate < today ? 'Terminé' : 'Planifié',
+      playerCount,
+    }));
   }
 
   async createSession(user: JwtPayload, body: {
