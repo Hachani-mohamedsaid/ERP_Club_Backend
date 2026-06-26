@@ -805,6 +805,107 @@ export class PreparateurService {
     return { playerId, ...body };
   }
 
+  // ─── Recovery ──────────────────────────────────────────────────
+  async getRecoverySessions(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const [sessions, players, loads, risks] = await Promise.all([
+      this.prisma.recoverySession.findMany({
+        where: { organizationId },
+        include: { player: { select: { fullName: true } } },
+        orderBy: { sessionDate: 'desc' },
+      }),
+      this.prisma.clubPlayer.findMany({
+        where: { organizationId },
+        select: { id: true, fullName: true, position: true },
+      }),
+      this.prisma.playerLoad.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.injuryRisk.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
+
+    // Build latest fatigue and max risk score per player
+    const loadMap = new Map<string, number>();
+    for (const l of loads) {
+      if (!loadMap.has(l.playerId)) loadMap.set(l.playerId, l.fatigueScore);
+    }
+    const riskMap = new Map<string, number>();
+    for (const r of risks) {
+      const prev = riskMap.get(r.playerId) ?? 0;
+      if (r.risk > prev) riskMap.set(r.playerId, r.risk);
+    }
+
+    // AI recommendations
+    const recs = players
+      .map(p => {
+        const fatigue   = loadMap.get(p.id) ?? 0;
+        const riskScore = riskMap.get(p.id) ?? 0;
+        let rec: string | null = null;
+        let urgency = 'low';
+        if (riskScore >= 75 || fatigue >= 80) { rec = 'Cryo + repos 48h'; urgency = 'high'; }
+        else if (riskScore >= 50 || fatigue >= 65) { rec = 'Massage + cryothérapie'; urgency = 'high'; }
+        else if (riskScore >= 30 || fatigue >= 50) { rec = 'Repos complet + kiné'; urgency = 'medium'; }
+        else if (fatigue >= 35) { rec = 'Hydratation renforcée'; urgency = 'low'; }
+        return rec ? { playerId: p.id, player: p.fullName, rec, urgency } : null;
+      })
+      .filter(Boolean);
+
+    return {
+      sessions: sessions.map(s => ({
+        id: s.id,
+        playerId: s.playerId,
+        playerName: s.player.fullName,
+        method: s.method,
+        date: s.sessionDate.toISOString().split('T')[0],
+        duration: s.duration,
+        status: s.status,
+        notes: s.notes ?? '',
+      })),
+      recommendations: recs,
+    };
+  }
+
+  async createRecoverySession(user: JwtPayload, body: {
+    playerId: string; method: string; date: string; duration: string; notes?: string;
+  }) {
+    const organizationId = this.orgId(user);
+    const player = await this.prisma.clubPlayer.findFirst({
+      where: { id: body.playerId, organizationId },
+      select: { fullName: true },
+    });
+    if (!player) throw new NotFoundException('Joueur introuvable');
+    const session = await this.prisma.recoverySession.create({
+      data: {
+        organizationId,
+        playerId: body.playerId,
+        method: body.method,
+        sessionDate: new Date(body.date),
+        duration: body.duration,
+        status: 'Planifié',
+        notes: body.notes,
+      },
+    });
+    return { ...session, playerName: player.fullName, date: session.sessionDate.toISOString().split('T')[0] };
+  }
+
+  async updateRecoverySession(user: JwtPayload, id: string, body: { status?: string; notes?: string }) {
+    const organizationId = this.orgId(user);
+    return this.prisma.recoverySession.update({
+      where: { id, organizationId },
+      data: body,
+    });
+  }
+
+  async deleteRecoverySession(user: JwtPayload, id: string) {
+    const organizationId = this.orgId(user);
+    await this.prisma.recoverySession.delete({ where: { id, organizationId } });
+    return { id };
+  }
+
   // ─── Helpers ───────────────────────────────────────────────────
   private defaultScores(playerStatus: string) {
     switch (playerStatus) {

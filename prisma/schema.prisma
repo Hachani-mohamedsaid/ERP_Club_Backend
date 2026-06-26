@@ -67,6 +67,7 @@ model Organization {
   trainingPrograms TrainingProgram[]
   matchReadiness   MatchReadiness[]
   wellnessEntries  WellnessEntry[]
+  recoverySessions RecoverySession[]
   sponsors         ClubSponsor[]
   invoices         ClubInvoice[]
   authUsers        User[]                    @relation("OrganizationMembers")
@@ -212,6 +213,7 @@ model ClubPlayer {
   sessionPresences SessionPresence[]
   matchReadiness   MatchReadiness[]
   wellnessEntries  WellnessEntry[]
+  recoverySessions RecoverySession[]
 }
 
 model ClubStaff {
@@ -736,5 +738,22 @@ model WellnessEntry {
   player         ClubPlayer   @relation(fields: [playerId], references: [id], onDelete: Cascade)
 
   @@unique([organizationId, playerId])
+  @@index([organizationId])
+}
+
+model RecoverySession {
+  id             String       @id @default(uuid())
+  organizationId String
+  playerId       String
+  method         String       @default("Repos")
+  sessionDate    DateTime
+  duration       String       @default("30 min")
+  status         String       @default("Planifié")
+  notes          String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  player         ClubPlayer   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
   @@index([organizationId])
 }

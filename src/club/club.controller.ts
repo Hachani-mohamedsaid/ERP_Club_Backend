@@ -421,6 +421,33 @@ export class ClubController {
     return this.preparateur.upsertWellness(user, playerId, body);
   }
 
+  @Get('preparateur/recovery')
+  getRecoverySessions(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getRecoverySessions(user);
+  }
+
+  @Post('preparateur/recovery')
+  createRecoverySession(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { playerId: string; method: string; date: string; duration: string; notes?: string },
+  ) {
+    return this.preparateur.createRecoverySession(user, body);
+  }
+
+  @Patch('preparateur/recovery/:id')
+  updateRecoverySession(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { status?: string; notes?: string },
+  ) {
+    return this.preparateur.updateRecoverySession(user, id, body);
+  }
+
+  @Delete('preparateur/recovery/:id')
+  deleteRecoverySession(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.preparateur.deleteRecoverySession(user, id);
+  }
+
   // ─── Player Photo ────────────────────────────────────────────────
 
   @Patch('players/:id/photo')
