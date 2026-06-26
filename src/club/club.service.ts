@@ -1676,4 +1676,305 @@ export class ClubService {
       await this.prisma.playerChemistry.createMany({ data: pairs, skipDuplicates: true });
     }
   }
+
+  // ─── Finance CRUD extensions ────────────────────────────────────
+  async updateFinanceEntry(user: JwtPayload, id: string, data: Record<string, unknown>) {
+    const organizationId = this.orgId(user);
+    const entry = await this.prisma.clubFinanceEntry.findFirst({ where: { id, organizationId } });
+    if (!entry) throw new NotFoundException('Entrée financière introuvable.');
+    await this.prisma.clubFinanceEntry.update({
+      where: { id },
+      data: {
+        label: data.label ? String(data.label) : undefined,
+        amount: data.amount ? Number(data.amount) : undefined,
+        type: data.type === 'REVENUE' ? 'REVENUE' : data.type === 'EXPENSE' ? 'EXPENSE' : undefined,
+        category: data.category ? String(data.category) : undefined,
+        entryDate: data.entryDate ? new Date(String(data.entryDate)) : undefined,
+      },
+    });
+    return this.listFinance(user);
+  }
+
+  async deleteFinanceEntry(user: JwtPayload, id: string) {
+    const organizationId = this.orgId(user);
+    const entry = await this.prisma.clubFinanceEntry.findFirst({ where: { id, organizationId } });
+    if (!entry) throw new NotFoundException('Entrée financière introuvable.');
+    await this.prisma.clubFinanceEntry.delete({ where: { id } });
+    await this.syncDashboardStats(organizationId);
+    return this.listFinance(user);
+  }
+
+  // ─── Contract CRUD extensions ────────────────────────────────────
+  async updateContract(user: JwtPayload, id: string, data: Record<string, unknown>) {
+    const organizationId = this.orgId(user);
+    const contract = await this.prisma.clubContract.findFirst({ where: { id, organizationId } });
+    if (!contract) throw new NotFoundException('Contrat introuvable.');
+    const updateData: Record<string, unknown> = {};
+    if (data.holderName) updateData.holderName = String(data.holderName);
+    if (data.startDate) updateData.startDate = new Date(String(data.startDate));
+    if (data.endDate) updateData.endDate = new Date(String(data.endDate));
+    if (data.salaryMonthly != null) updateData.salaryMonthly = Number(data.salaryMonthly);
+    if (data.bonus != null) updateData.bonus = Number(data.bonus);
+    if (data.releaseClause !== undefined) updateData.releaseClause = data.releaseClause ? String(data.releaseClause) : null;
+    await this.prisma.clubContract.update({ where: { id }, data: updateData as never });
+    return this.listContracts(user);
+  }
+
+  async deleteContract(user: JwtPayload, id: string) {
+    const organizationId = this.orgId(user);
+    const contract = await this.prisma.clubContract.findFirst({ where: { id, organizationId } });
+    if (!contract) throw new NotFoundException('Contrat introuvable.');
+    await this.prisma.clubContract.delete({ where: { id } });
+    return this.listContracts(user);
+  }
+
+  // ─── Sponsors ───────────────────────────────────────────────────
+  async listSponsors(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const sponsors = await this.prisma.clubSponsor.findMany({
+      where: { organizationId },
+      orderBy: { montant: 'desc' },
+    });
+    if (sponsors.length === 0) {
+      await this.seedSponsors(organizationId);
+      return this.prisma.clubSponsor.findMany({ where: { organizationId }, orderBy: { montant: 'desc' } });
+    }
+    return sponsors;
+  }
+
+  async createSponsor(user: JwtPayload, data: Record<string, unknown>) {
+    const organizationId = this.orgId(user);
+    const nom = String(data.nom ?? '').trim();
+    if (!nom) throw new BadRequestException('Le nom du sponsor est requis.');
+    const endDate = data.endDate ? new Date(String(data.endDate)) : (() => { const d = new Date(); d.setFullYear(d.getFullYear() + 1); return d; })();
+    return this.prisma.clubSponsor.create({
+      data: {
+        organizationId,
+        nom,
+        logo: String(data.logo ?? '🤝'),
+        secteur: String(data.secteur ?? 'Partenaire'),
+        montant: Number(data.montant ?? 0),
+        startDate: data.startDate ? new Date(String(data.startDate)) : new Date(),
+        endDate,
+        renewalProbability: Number(data.renewalProbability ?? 50),
+        status: String(data.status ?? 'Actif'),
+        contact: data.contact ? String(data.contact) : null,
+        notes: data.notes ? String(data.notes) : null,
+      },
+    });
+  }
+
+  async updateSponsor(user: JwtPayload, id: string, data: Record<string, unknown>) {
+    const organizationId = this.orgId(user);
+    const sponsor = await this.prisma.clubSponsor.findFirst({ where: { id, organizationId } });
+    if (!sponsor) throw new NotFoundException('Sponsor introuvable.');
+    const updateData: Record<string, unknown> = {};
+    if (data.nom) updateData.nom = String(data.nom);
+    if (data.logo) updateData.logo = String(data.logo);
+    if (data.secteur) updateData.secteur = String(data.secteur);
+    if (data.montant != null) updateData.montant = Number(data.montant);
+    if (data.startDate) updateData.startDate = new Date(String(data.startDate));
+    if (data.endDate) updateData.endDate = new Date(String(data.endDate));
+    if (data.renewalProbability != null) updateData.renewalProbability = Number(data.renewalProbability);
+    if (data.status) updateData.status = String(data.status);
+    if (data.contact !== undefined) updateData.contact = data.contact ? String(data.contact) : null;
+    if (data.notes !== undefined) updateData.notes = data.notes ? String(data.notes) : null;
+    return this.prisma.clubSponsor.update({ where: { id }, data: updateData as never });
+  }
+
+  async deleteSponsor(user: JwtPayload, id: string) {
+    const organizationId = this.orgId(user);
+    const sponsor = await this.prisma.clubSponsor.findFirst({ where: { id, organizationId } });
+    if (!sponsor) throw new NotFoundException('Sponsor introuvable.');
+    await this.prisma.clubSponsor.delete({ where: { id } });
+    return { success: true };
+  }
+
+  private async seedSponsors(organizationId: string) {
+    const now = new Date();
+    const nextYear = new Date(now.getFullYear() + 1, now.getMonth(), 1);
+    const nextTwoYears = new Date(now.getFullYear() + 2, now.getMonth(), 1);
+    const lastMonth = new Date(now.getFullYear() - 1, now.getMonth(), 1);
+    await this.prisma.clubSponsor.createMany({
+      data: [
+        { organizationId, nom: 'Sponsor Principal', logo: '🏆', secteur: 'Équipement', montant: 450000, startDate: lastMonth, endDate: nextTwoYears, renewalProbability: 90, status: 'Actif', contact: 'Responsable commercial', notes: 'Partenaire équipementier principal' },
+        { organizationId, nom: 'Sponsor Maillot', logo: '✈️', secteur: 'Services', montant: 350000, startDate: lastMonth, endDate: nextYear, renewalProbability: 75, status: 'Actif', contact: 'Directeur marketing', notes: 'Sponsor maillot domicile' },
+        { organizationId, nom: 'Partenaire Télécom', logo: '📡', secteur: 'Télécom', montant: 280000, startDate: lastMonth, endDate: new Date(now.getFullYear(), now.getMonth() + 2, 1), renewalProbability: 55, status: 'Expire bientot', contact: 'Chef de partenariats', notes: 'À renouveler' },
+        { organizationId, nom: 'Partenaire Financier', logo: '🏦', secteur: 'Finance', montant: 150000, startDate: new Date(now.getFullYear() - 2, 0, 1), endDate: lastMonth, renewalProbability: 20, status: 'Expire', contact: 'Directeur régional', notes: 'Négociations en cours' },
+      ],
+      skipDuplicates: true,
+    });
+  }
+
+  // ─── Invoices ────────────────────────────────────────────────────
+  async listInvoices(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const invoices = await this.prisma.clubInvoice.findMany({
+      where: { organizationId },
+      orderBy: { invoiceDate: 'desc' },
+    });
+    if (invoices.length === 0) {
+      await this.seedInvoices(organizationId);
+      return this.prisma.clubInvoice.findMany({ where: { organizationId }, orderBy: { invoiceDate: 'desc' } });
+    }
+    return invoices;
+  }
+
+  async createInvoice(user: JwtPayload, data: Record<string, unknown>) {
+    const organizationId = this.orgId(user);
+    const fournisseur = String(data.fournisseur ?? '').trim();
+    if (!fournisseur) throw new BadRequestException('Le fournisseur est requis.');
+    const count = await this.prisma.clubInvoice.count({ where: { organizationId } });
+    const reference = data.reference ? String(data.reference) : `FAC-${String(count + 1).padStart(3, '0')}`;
+    return this.prisma.clubInvoice.create({
+      data: {
+        organizationId,
+        reference,
+        fournisseur,
+        invoiceType: String(data.invoiceType ?? 'Fournisseur'),
+        montant: Number(data.montant ?? 0),
+        invoiceDate: data.invoiceDate ? new Date(String(data.invoiceDate)) : new Date(),
+        dueDate: data.dueDate ? new Date(String(data.dueDate)) : null,
+        status: String(data.status ?? 'En attente'),
+        description: data.description ? String(data.description) : null,
+      },
+    });
+  }
+
+  async updateInvoice(user: JwtPayload, id: string, data: Record<string, unknown>) {
+    const organizationId = this.orgId(user);
+    const invoice = await this.prisma.clubInvoice.findFirst({ where: { id, organizationId } });
+    if (!invoice) throw new NotFoundException('Facture introuvable.');
+    const updateData: Record<string, unknown> = {};
+    if (data.fournisseur) updateData.fournisseur = String(data.fournisseur);
+    if (data.invoiceType) updateData.invoiceType = String(data.invoiceType);
+    if (data.montant != null) updateData.montant = Number(data.montant);
+    if (data.status) updateData.status = String(data.status);
+    if (data.dueDate !== undefined) updateData.dueDate = data.dueDate ? new Date(String(data.dueDate)) : null;
+    if (data.description !== undefined) updateData.description = data.description ? String(data.description) : null;
+    return this.prisma.clubInvoice.update({ where: { id }, data: updateData as never });
+  }
+
+  async deleteInvoice(user: JwtPayload, id: string) {
+    const organizationId = this.orgId(user);
+    const invoice = await this.prisma.clubInvoice.findFirst({ where: { id, organizationId } });
+    if (!invoice) throw new NotFoundException('Facture introuvable.');
+    await this.prisma.clubInvoice.delete({ where: { id } });
+    return { success: true };
+  }
+
+  async markInvoicePaid(user: JwtPayload, id: string) {
+    const organizationId = this.orgId(user);
+    const invoice = await this.prisma.clubInvoice.findFirst({ where: { id, organizationId } });
+    if (!invoice) throw new NotFoundException('Facture introuvable.');
+    return this.prisma.clubInvoice.update({ where: { id }, data: { status: 'Payée' } });
+  }
+
+  private async seedInvoices(organizationId: string) {
+    const now = new Date();
+    await this.prisma.clubInvoice.createMany({
+      data: [
+        { organizationId, reference: 'FAC-001', fournisseur: 'Équipement Sport', invoiceType: 'Équipement', montant: 15000, invoiceDate: new Date(now.getFullYear(), now.getMonth(), 1), status: 'Payée', description: 'Matériel sportif saison' },
+        { organizationId, reference: 'FAC-002', fournisseur: 'Maintenance Stade', invoiceType: 'Infrastructure', montant: 8500, invoiceDate: new Date(now.getFullYear(), now.getMonth(), 5), status: 'Payée', description: 'Entretien terrain' },
+        { organizationId, reference: 'FAC-003', fournisseur: 'Transport Club', invoiceType: 'Transport', montant: 12000, invoiceDate: new Date(now.getFullYear(), now.getMonth(), 10), dueDate: new Date(now.getFullYear(), now.getMonth() + 1, 10), status: 'En attente', description: 'Déplacements matchs' },
+        { organizationId, reference: 'FAC-004', fournisseur: 'Assurance Joueurs', invoiceType: 'Fournisseur', montant: 25000, invoiceDate: new Date(now.getFullYear(), now.getMonth() - 1, 15), dueDate: new Date(now.getFullYear(), now.getMonth(), 15), status: 'Retard', description: 'Couverture accidents sportifs' },
+        { organizationId, reference: 'FAC-005', fournisseur: 'Fournitures Médicales', invoiceType: 'Médical', montant: 6500, invoiceDate: new Date(now.getFullYear(), now.getMonth(), 12), dueDate: new Date(now.getFullYear(), now.getMonth() + 1, 12), status: 'En attente', description: 'Matériel infirmerie' },
+      ],
+      skipDuplicates: true,
+    });
+  }
+
+  // ─── Finance seeding check ───────────────────────────────────────
+  async seedFinanceDataIfEmpty(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const count = await this.prisma.clubFinanceEntry.count({ where: { organizationId } });
+    if (count > 0) return { seeded: false };
+    const now = new Date();
+    const monthLabels = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'];
+    const entries: {
+      organizationId: string; label: string; amount: number;
+      type: 'REVENUE' | 'EXPENSE'; category: string; entryDate: Date;
+    }[] = [];
+    for (let m = 5; m >= 0; m--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - m, 15);
+      const monthName = monthLabels[d.getMonth()];
+      entries.push(
+        { organizationId, label: `Droits TV — ${monthName}`, amount: 120000, type: 'REVENUE', category: 'Médias', entryDate: new Date(d.getFullYear(), d.getMonth(), 5) },
+        { organizationId, label: `Billetterie — ${monthName}`, amount: 35000 + Math.floor(Math.random() * 20000), type: 'REVENUE', category: 'Billetterie', entryDate: new Date(d.getFullYear(), d.getMonth(), 10) },
+        { organizationId, label: `Salaires — ${monthName}`, amount: 180000 + Math.floor(Math.random() * 30000), type: 'EXPENSE', category: 'Salaires', entryDate: new Date(d.getFullYear(), d.getMonth(), 28) },
+        { organizationId, label: `Équipements — ${monthName}`, amount: 15000 + Math.floor(Math.random() * 10000), type: 'EXPENSE', category: 'Équipements', entryDate: new Date(d.getFullYear(), d.getMonth(), 15) },
+      );
+    }
+    entries.push(
+      { organizationId, label: 'Sponsor principal — Q2', amount: 250000, type: 'REVENUE', category: 'Sponsoring', entryDate: new Date(now.getFullYear(), now.getMonth(), 1) },
+      { organizationId, label: 'Transfert entrant', amount: 350000, type: 'REVENUE', category: 'Transferts', entryDate: new Date(now.getFullYear(), now.getMonth() - 2, 20) },
+      { organizationId, label: 'Transfert sortant', amount: 200000, type: 'EXPENSE', category: 'Transferts', entryDate: new Date(now.getFullYear(), now.getMonth() - 1, 10) },
+    );
+    await this.prisma.clubFinanceEntry.createMany({ data: entries });
+    const contractCount = await this.prisma.clubContract.count({ where: { organizationId } });
+    if (contractCount === 0) {
+      await this.prisma.clubContract.createMany({
+        data: [
+          { organizationId, holderName: 'Joueur Attaquant', startDate: new Date('2023-01-01'), endDate: new Date('2026-06-30'), salaryMonthly: 85000, bonus: 12000, consumedPct: 90 },
+          { organizationId, holderName: 'Joueur Défenseur', startDate: new Date('2022-03-15'), endDate: new Date('2026-12-31'), salaryMonthly: 75000, bonus: 10000, consumedPct: 65 },
+          { organizationId, holderName: 'Milieu de terrain', startDate: new Date('2023-07-01'), endDate: new Date('2027-05-31'), salaryMonthly: 68000, bonus: 8000, consumedPct: 35 },
+          { organizationId, holderName: 'Gardien de but', startDate: new Date('2023-09-01'), endDate: new Date('2026-08-31'), salaryMonthly: 55000, bonus: 6000, consumedPct: 75 },
+          { organizationId, holderName: 'Coach Principal', startDate: new Date('2024-01-01'), endDate: new Date('2027-06-30'), salaryMonthly: 65000, bonus: 15000, consumedPct: 50 },
+        ],
+      });
+    }
+    return { seeded: true };
+  }
+
+  // ─── Finance Report ──────────────────────────────────────────────
+  async getFinanceReport(user: JwtPayload) {
+    const financeData = await this.listFinance(user);
+    const contracts = await this.listContracts(user);
+    const sponsors = await this.listSponsors(user);
+    const invoices = await this.listInvoices(user);
+
+    const totalSalaries = contracts.reduce((s, c) => s + (c.salaryMonthly ?? 0), 0);
+    const totalSponsoring = sponsors.filter(s => s.status === 'Actif').reduce((s, sp) => s + sp.montant, 0);
+    const overdueInvoices = invoices.filter(i => i.status === 'Retard');
+    const pendingInvoices = invoices.filter(i => i.status === 'En attente');
+    const expiringSoonContracts = contracts.filter(c => {
+      const daysLeft = Math.ceil((c.endDate.getTime() - Date.now()) / 86400000);
+      return daysLeft > 0 && daysLeft <= 90;
+    });
+    const expiringSponsors = sponsors.filter(s => s.status === 'Expire bientot');
+
+    return {
+      ...financeData,
+      contracts: {
+        total: contracts.length,
+        active: contracts.filter(c => new Date(c.endDate) > new Date()).length,
+        expiringSoon: expiringSoonContracts.length,
+        expired: contracts.filter(c => new Date(c.endDate) < new Date()).length,
+        totalMonthlySalary: totalSalaries,
+        list: contracts,
+      },
+      sponsors: {
+        total: sponsors.length,
+        active: sponsors.filter(s => s.status === 'Actif').length,
+        expiringSoon: expiringSponsors.length,
+        totalAnnual: totalSponsoring,
+        list: sponsors,
+      },
+      invoices: {
+        total: invoices.length,
+        overdue: overdueInvoices.length,
+        pending: pendingInvoices.length,
+        totalAmount: invoices.reduce((s, i) => s + i.montant, 0),
+        list: invoices,
+      },
+      alerts: [
+        ...overdueInvoices.map(i => ({ type: 'invoice', message: `Facture en retard: ${i.reference} — ${i.fournisseur}`, severity: 'error', icon: '📄' })),
+        ...expiringSoonContracts.slice(0, 2).map(c => {
+          const days = Math.ceil((c.endDate.getTime() - Date.now()) / 86400000);
+          return { type: 'contract', message: `Contrat expire dans ${days}j: ${c.holderName}`, severity: 'warning', icon: '📋' };
+        }),
+        ...expiringSponsors.slice(0, 2).map(s => ({ type: 'sponsor', message: `Sponsor à renouveler: ${s.nom}`, severity: 'info', icon: '🤝' })),
+      ],
+    };
+  }
 }

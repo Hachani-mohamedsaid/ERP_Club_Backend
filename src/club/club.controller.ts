@@ -387,4 +387,121 @@ export class ClubController {
   ) {
     return this.club.updateChemistry(user, id, body.chemistry);
   }
+
+  // ─── Finance CRUD extensions ─────────────────────────────────────
+  @Patch('finance/:id')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Finances', 'update')
+  updateFinanceEntry(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.updateFinanceEntry(user, id, body);
+  }
+
+  @Delete('finance/:id')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Finances', 'delete')
+  deleteFinanceEntry(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.deleteFinanceEntry(user, id);
+  }
+
+  @Post('finance/seed')
+  seedFinance(@CurrentUser() user: JwtPayload) {
+    return this.club.seedFinanceDataIfEmpty(user);
+  }
+
+  @Get('finance/report')
+  getFinanceReport(@CurrentUser() user: JwtPayload) {
+    return this.club.getFinanceReport(user);
+  }
+
+  // ─── Contracts CRUD extensions ────────────────────────────────────
+  @Patch('contracts/:id')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Contrats', 'update')
+  updateContract(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.updateContract(user, id, body);
+  }
+
+  @Delete('contracts/:id')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Contrats', 'delete')
+  deleteContract(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.deleteContract(user, id);
+  }
+
+  // ─── Sponsors ──────────────────────────────────────────────────────
+  @Get('sponsors')
+  listSponsors(@CurrentUser() user: JwtPayload) {
+    return this.club.listSponsors(user);
+  }
+
+  @Post('sponsors')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Finances', 'create')
+  createSponsor(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
+    return this.club.createSponsor(user, body);
+  }
+
+  @Patch('sponsors/:id')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Finances', 'update')
+  updateSponsor(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.updateSponsor(user, id, body);
+  }
+
+  @Delete('sponsors/:id')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Finances', 'delete')
+  deleteSponsor(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.deleteSponsor(user, id);
+  }
+
+  // ─── Invoices ──────────────────────────────────────────────────────
+  @Get('invoices')
+  listInvoices(@CurrentUser() user: JwtPayload) {
+    return this.club.listInvoices(user);
+  }
+
+  @Post('invoices')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Finances', 'create')
+  createInvoice(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
+    return this.club.createInvoice(user, body);
+  }
+
+  @Patch('invoices/:id')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Finances', 'update')
+  updateInvoice(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.updateInvoice(user, id, body);
+  }
+
+  @Patch('invoices/:id/pay')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Finances', 'update')
+  markInvoicePaid(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.markInvoicePaid(user, id);
+  }
+
+  @Delete('invoices/:id')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('Finances', 'delete')
+  deleteInvoice(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.deleteInvoice(user, id);
+  }
 }
