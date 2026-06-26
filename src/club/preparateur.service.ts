@@ -761,6 +761,50 @@ export class PreparateurService {
     return { playerId, status };
   }
 
+  // ─── Wellness ──────────────────────────────────────────────────
+  async getWellness(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const [players, entries] = await Promise.all([
+      this.prisma.clubPlayer.findMany({
+        where: { organizationId },
+        select: { id: true, fullName: true, position: true, photoUrl: true },
+        orderBy: { fullName: 'asc' },
+      }),
+      this.prisma.wellnessEntry.findMany({
+        where: { organizationId },
+      }),
+    ]);
+    const entryMap = new Map(entries.map(e => [e.playerId, e]));
+    return players.map(p => {
+      const e = entryMap.get(p.id);
+      return {
+        playerId: p.id,
+        name: p.fullName,
+        position: p.position ?? '',
+        photoUrl: p.photoUrl ?? null,
+        sommeil: e?.sommeil ?? 0,
+        fatigue: e?.fatigue ?? 0,
+        stress:  e?.stress  ?? 0,
+        douleur: e?.douleur ?? 0,
+        humeur:  e?.humeur  ?? 0,
+        filled:  !!e,
+        filledAt: e?.filledAt ?? null,
+      };
+    });
+  }
+
+  async upsertWellness(user: JwtPayload, playerId: string, body: {
+    sommeil: number; fatigue: number; stress: number; douleur: number; humeur: number;
+  }) {
+    const organizationId = this.orgId(user);
+    await this.prisma.wellnessEntry.upsert({
+      where: { organizationId_playerId: { organizationId, playerId } },
+      create: { organizationId, playerId, ...body, filledAt: new Date() },
+      update: { ...body, filledAt: new Date() },
+    });
+    return { playerId, ...body };
+  }
+
   // ─── Helpers ───────────────────────────────────────────────────
   private defaultScores(playerStatus: string) {
     switch (playerStatus) {

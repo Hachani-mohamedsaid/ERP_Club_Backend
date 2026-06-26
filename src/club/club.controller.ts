@@ -407,6 +407,20 @@ export class ClubController {
     return this.preparateur.deleteProgram(user, id);
   }
 
+  @Get('preparateur/wellness')
+  getWellness(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getWellness(user);
+  }
+
+  @Put('preparateur/wellness/:playerId')
+  upsertWellness(
+    @CurrentUser() user: JwtPayload,
+    @Param('playerId') playerId: string,
+    @Body() body: { sommeil: number; fatigue: number; stress: number; douleur: number; humeur: number },
+  ) {
+    return this.preparateur.upsertWellness(user, playerId, body);
+  }
+
   // ─── Player Photo ────────────────────────────────────────────────
 
   @Patch('players/:id/photo')
