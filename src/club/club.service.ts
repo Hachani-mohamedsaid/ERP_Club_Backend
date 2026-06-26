@@ -1055,7 +1055,7 @@ export class ClubService {
   async bookPlayerAppointment(user: JwtPayload, playerId: string, data: Record<string, unknown>) {
     const organizationId = this.orgId(user);
     const player = await this.prisma.clubPlayer.findFirst({ where: { id: playerId, organizationId } });
-    const playerName = player?.name ?? 'Joueur';
+    const playerName = player?.fullName ?? 'Joueur';
     const appointmentType = String(data.appointmentType ?? 'Bilan médical');
     const requestedDate = data.requestedDate ? new Date(String(data.requestedDate)) : (() => { const d = new Date(); d.setDate(d.getDate() + 7); return d; })();
     return this.prisma.clubCalendarEvent.create({
