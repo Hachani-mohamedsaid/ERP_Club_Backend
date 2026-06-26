@@ -362,6 +362,13 @@ export class ClubController {
     return this.preparateur.updatePresence(user, playerId, body.status);
   }
 
+  // ─── Préparateur — Comparaison ──────────────────────────────────
+
+  @Get('preparateur/comparison')
+  getComparisonPlayers(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getComparisonPlayers(user);
+  }
+
   // ─── Préparateur — Match Readiness ─────────────────────────────
 
   @Get('preparateur/match-readiness')
@@ -398,6 +405,72 @@ export class ClubController {
   @Delete('preparateur/programs/:id')
   deleteProgram(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.preparateur.deleteProgram(user, id);
+  }
+
+  @Get('preparateur/wellness')
+  getWellness(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getWellness(user);
+  }
+
+  @Put('preparateur/wellness/:playerId')
+  upsertWellness(
+    @CurrentUser() user: JwtPayload,
+    @Param('playerId') playerId: string,
+    @Body() body: { sommeil: number; fatigue: number; stress: number; douleur: number; humeur: number },
+  ) {
+    return this.preparateur.upsertWellness(user, playerId, body);
+  }
+
+  @Get('preparateur/reports')
+  getReports(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getReports(user);
+  }
+
+  @Get('preparateur/notifications')
+  getNotifications(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getNotifications(user);
+  }
+
+  @Patch('preparateur/notifications/read-all')
+  markAllNotificationsRead(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.markAllNotificationsRead(user);
+  }
+
+  @Patch('preparateur/notifications/:id/read')
+  markNotificationRead(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.preparateur.markNotificationRead(user, id);
+  }
+
+  @Delete('preparateur/notifications/:id')
+  deleteNotification(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.preparateur.deleteNotification(user, id);
+  }
+
+  @Get('preparateur/recovery')
+  getRecoverySessions(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getRecoverySessions(user);
+  }
+
+  @Post('preparateur/recovery')
+  createRecoverySession(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { playerId: string; method: string; date: string; duration: string; notes?: string },
+  ) {
+    return this.preparateur.createRecoverySession(user, body);
+  }
+
+  @Patch('preparateur/recovery/:id')
+  updateRecoverySession(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { status?: string; notes?: string },
+  ) {
+    return this.preparateur.updateRecoverySession(user, id, body);
+  }
+
+  @Delete('preparateur/recovery/:id')
+  deleteRecoverySession(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.preparateur.deleteRecoverySession(user, id);
   }
 
   // ─── Player Photo ────────────────────────────────────────────────

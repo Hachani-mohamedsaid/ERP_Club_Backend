@@ -441,11 +441,20 @@ export class PreparateurService {
 
   async getSessions(user: JwtPayload) {
     const organizationId = this.orgId(user);
-    const rows = await this.prisma.clubCalendarEvent.findMany({
-      where: { organizationId },
-      orderBy: [{ eventDate: 'asc' }, { eventTime: 'asc' }],
-    });
-    return rows.map(r => this.calendarToSession(r));
+    const [rows, playerCount] = await Promise.all([
+      this.prisma.clubCalendarEvent.findMany({
+        where: { organizationId },
+        orderBy: [{ eventDate: 'desc' }, { eventTime: 'asc' }],
+      }),
+      this.prisma.clubPlayer.count({ where: { organizationId } }),
+    ]);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return rows.map(r => ({
+      ...this.calendarToSession(r),
+      status: r.eventDate < today ? 'Terminé' : 'Planifié',
+      playerCount,
+    }));
   }
 
   async createSession(user: JwtPayload, body: {
@@ -595,6 +604,48 @@ export class PreparateurService {
     return { deleted: true };
   }
 
+  // ─── Comparison ─────────────────────────────────────────────────
+
+  async getComparisonPlayers(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+
+    const [players, loads] = await Promise.all([
+      this.prisma.clubPlayer.findMany({
+        where: { organizationId },
+        orderBy: { fullName: 'asc' },
+        select: { id: true, fullName: true, position: true, age: true, weight: true },
+      }),
+      this.prisma.playerLoad.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+        select: { playerId: true, loadScore: true, fatigueScore: true, recoveryScore: true },
+      }),
+    ]);
+
+    // keep only latest load per player
+    const loadMap = new Map<string, { loadScore: number; fatigueScore: number; recoveryScore: number }>();
+    for (const l of loads) {
+      if (!loadMap.has(l.playerId)) loadMap.set(l.playerId, l);
+    }
+
+    return players.map(p => {
+      const load = loadMap.get(p.id) ?? { loadScore: 50, fatigueScore: 30, recoveryScore: 70 };
+      return {
+        id:       p.id,
+        name:     p.fullName,
+        position: p.position,
+        age:      p.age,
+        weight:   p.weight ?? '75 kg',
+        charge:   load.loadScore,
+        fatigue:  load.fatigueScore,
+        recovery: load.recoveryScore,
+        wellness: load.recoveryScore,
+        distance: Math.round(load.loadScore / 10),
+        sprints:  Math.round(load.loadScore / 3.5),
+      };
+    });
+  }
+
   // ─── Match Readiness ────────────────────────────────────────────
 
   async getMatchReadiness(user: JwtPayload) {
@@ -708,6 +759,431 @@ export class PreparateurService {
       update: { status },
     });
     return { playerId, status };
+  }
+
+  // ─── Wellness ──────────────────────────────────────────────────
+  async getWellness(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const [players, entries] = await Promise.all([
+      this.prisma.clubPlayer.findMany({
+        where: { organizationId },
+        select: { id: true, fullName: true, position: true, photoUrl: true },
+        orderBy: { fullName: 'asc' },
+      }),
+      this.prisma.wellnessEntry.findMany({
+        where: { organizationId },
+      }),
+    ]);
+    const entryMap = new Map(entries.map(e => [e.playerId, e]));
+    return players.map(p => {
+      const e = entryMap.get(p.id);
+      return {
+        playerId: p.id,
+        name: p.fullName,
+        position: p.position ?? '',
+        photoUrl: p.photoUrl ?? null,
+        sommeil: e?.sommeil ?? 0,
+        fatigue: e?.fatigue ?? 0,
+        stress:  e?.stress  ?? 0,
+        douleur: e?.douleur ?? 0,
+        humeur:  e?.humeur  ?? 0,
+        filled:  !!e,
+        filledAt: e?.filledAt ?? null,
+      };
+    });
+  }
+
+  async upsertWellness(user: JwtPayload, playerId: string, body: {
+    sommeil: number; fatigue: number; stress: number; douleur: number; humeur: number;
+  }) {
+    const organizationId = this.orgId(user);
+    await this.prisma.wellnessEntry.upsert({
+      where: { organizationId_playerId: { organizationId, playerId } },
+      create: { organizationId, playerId, ...body, filledAt: new Date() },
+      update: { ...body, filledAt: new Date() },
+    });
+    return { playerId, ...body };
+  }
+
+  // ─── Rapports ──────────────────────────────────────────────────
+  async getReports(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const [players, allLoads, risks, wellnessEntries] = await Promise.all([
+      this.prisma.clubPlayer.findMany({
+        where: { organizationId },
+        select: { id: true, fullName: true, position: true, photoUrl: true, status: true },
+        orderBy: { fullName: 'asc' },
+      }),
+      this.prisma.playerLoad.findMany({
+        where: { organizationId },
+        orderBy: { sessionDate: 'desc' },
+      }),
+      this.prisma.injuryRisk.findMany({
+        where: { organizationId },
+        select: { playerId: true, risk: true },
+      }),
+      this.prisma.wellnessEntry.findMany({ where: { organizationId } }),
+    ]);
+
+    const MONTHS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'];
+
+    // Group loads by player (already ordered desc → first = latest)
+    const loadsByPlayer = new Map<string, typeof allLoads>();
+    for (const l of allLoads) {
+      if (!loadsByPlayer.has(l.playerId)) loadsByPlayer.set(l.playerId, []);
+      loadsByPlayer.get(l.playerId)!.push(l);
+    }
+
+    // Max risk per player
+    const riskMap = new Map<string, number>();
+    for (const r of risks) {
+      const prev = riskMap.get(r.playerId) ?? 0;
+      if (r.risk > prev) riskMap.set(r.playerId, r.risk);
+    }
+
+    // Wellness entry per player
+    const wellnessMap = new Map(wellnessEntries.map(e => [e.playerId, e]));
+
+    // Wellness score formula: (sommeil + (10-fatigue) + (10-stress) + (10-douleur) + humeur) / 50 * 100
+    const wellnessScore = (e: typeof wellnessEntries[0] | undefined) => {
+      if (!e) return 0;
+      return Math.round(((e.sommeil + (10 - e.fatigue) + (10 - e.stress) + (10 - e.douleur) + e.humeur) / 50) * 100);
+    };
+
+    const reports = players.map(p => {
+      const loads   = loadsByPlayer.get(p.id) ?? [];
+      const latest  = loads[0];
+      const wellness = wellnessMap.get(p.id);
+
+      // Apply same defaults as getChargeEquipe when no PlayerLoad exists
+      const { load: defLoad, fatigue: defFatigue, recovery: defRecovery } =
+        this.defaultScores(p.status ?? 'ACTIF');
+
+      // Charge: from PlayerLoad; fallback by player status (same as Charge Équipe)
+      const charge = latest?.loadScore ?? defLoad;
+
+      // Fatigue: merge PlayerLoad/default + Wellness (wellness.fatigue is 1-10, scale to 0-100)
+      const loadFatigue     = latest?.fatigueScore ?? defFatigue;
+      const wellnessFatigue = wellness ? wellness.fatigue * 10 : null;
+      const fatigue = wellnessFatigue !== null
+        ? Math.round((loadFatigue + wellnessFatigue) / 2)
+        : loadFatigue;
+
+      // Endurance: from PlayerLoad recoveryScore/default; blend wellness humeur×10 if available
+      const baseEndurance = latest?.recoveryScore ?? defRecovery;
+      const endurance = wellness
+        ? Math.round((baseEndurance + wellness.humeur * 10) / 2)
+        : baseEndurance;
+
+      // Wellness score (0-100)
+      const wScore = wellnessScore(wellness);
+
+      const riskScore = riskMap.get(p.id) ?? 0;
+      const hasData   = charge > 0 || fatigue > 0 || wScore > 0;
+      const type = riskScore >= 50 || (wellness && wellness.fatigue >= 7)
+        ? 'Risque blessure'
+        : hasData ? 'Hebdomadaire' : 'Aucune donnée';
+
+      const date = latest
+        ? latest.createdAt.toISOString().split('T')[0]
+        : wellness
+          ? wellness.filledAt.toISOString().split('T')[0]
+          : new Date().toISOString().split('T')[0];
+
+      // Evolution: last 6 PlayerLoad records
+      const evolution = [...loads].reverse().slice(-6).map(l => ({
+        month: MONTHS[l.createdAt.getMonth()],
+        charge: Math.round(Math.min(100, l.loadScore)),
+        fatigue: Math.round(Math.min(100, l.fatigueScore)),
+        endurance: Math.round(Math.min(100, l.recoveryScore)),
+      }));
+
+      return {
+        id: p.id,
+        playerId: p.id,
+        player: p.fullName,
+        position: p.position ?? '',
+        photoUrl: p.photoUrl ?? null,
+        date,
+        type,
+        charge,
+        fatigue,
+        endurance,
+        wellness: wScore,
+        evolution,
+      };
+    });
+
+    // Team summary entry — include if any player has data
+    const filledReports = reports.filter(r => r.charge > 0 || r.wellness > 0);
+    if (filledReports.length > 0) {
+      const avg = (arr: number[]) => Math.round(arr.reduce((s, v) => s + v, 0) / arr.length);
+      reports.unshift({
+        id: 'equipe',
+        playerId: '',
+        player: 'Équipe',
+        position: '',
+        photoUrl: null,
+        date: new Date().toISOString().split('T')[0],
+        type: 'Synthèse mensuelle',
+        charge:   avg(filledReports.map(r => r.charge)),
+        fatigue:  avg(filledReports.map(r => r.fatigue)),
+        endurance: avg(filledReports.map(r => r.endurance)),
+        wellness: avg(filledReports.map(r => r.wellness)),
+        evolution: [],
+      });
+    }
+
+    return reports;
+  }
+
+  // ─── Notifications ─────────────────────────────────────────────
+  private async generateNotifications(organizationId: string) {
+    const [risks, loads, programs, wellnessEntries, players, recoverySessions] = await Promise.all([
+      this.prisma.injuryRisk.findMany({
+        where: { organizationId },
+        include: { player: { select: { fullName: true } } },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.playerLoad.findMany({
+        where: { organizationId },
+        include: { player: { select: { fullName: true } } },
+        orderBy: { sessionDate: 'desc' },
+      }),
+      this.prisma.trainingProgram.findMany({
+        where: { organizationId, status: { in: ['valide', 'refuse'] } },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.wellnessEntry.findMany({ where: { organizationId }, select: { playerId: true } }),
+      this.prisma.clubPlayer.findMany({ where: { organizationId }, select: { id: true, fullName: true } }),
+      this.prisma.recoverySession.findMany({
+        where: { organizationId, status: 'Terminé' },
+        include: { player: { select: { fullName: true } } },
+        orderBy: { updatedAt: 'desc' },
+        take: 10,
+      }),
+    ]);
+
+    // Latest load per player
+    const latestLoadByPlayer = new Map<string, typeof loads[0]>();
+    for (const l of loads) {
+      if (!latestLoadByPlayer.has(l.playerId)) latestLoadByPlayer.set(l.playerId, l);
+    }
+
+    const upserts: Promise<unknown>[] = [];
+
+    // 1. InjuryRisk notifications
+    for (const r of risks) {
+      const priority = r.risk >= 70 ? 'haute' : r.risk >= 40 ? 'moyenne' : 'basse';
+      upserts.push(this.prisma.prepNotification.upsert({
+        where: { organizationId_sourceType_sourceId: { organizationId, sourceType: 'InjuryRisk', sourceId: r.id } },
+        create: {
+          organizationId, type: 'blessure', priority, isRead: false,
+          playerName: r.player.fullName, sourceType: 'InjuryRisk', sourceId: r.id,
+          title: `Risque blessure — ${r.player.fullName}`,
+          body: `Zone: ${r.zone} · Risque: ${r.risk}%${r.recommendation.length ? ' · ' + r.recommendation[0] : ''}`,
+        },
+        update: { title: `Risque blessure — ${r.player.fullName}`, body: `Zone: ${r.zone} · Risque: ${r.risk}%${r.recommendation.length ? ' · ' + r.recommendation[0] : ''}`, priority },
+      }));
+    }
+
+    // 2. PlayerLoad fatigue notifications (latest per player)
+    for (const [, l] of latestLoadByPlayer) {
+      if (l.fatigueScore < 60) continue;
+      const priority = l.fatigueScore >= 80 ? 'haute' : 'moyenne';
+      upserts.push(this.prisma.prepNotification.upsert({
+        where: { organizationId_sourceType_sourceId: { organizationId, sourceType: 'PlayerLoad', sourceId: l.id } },
+        create: {
+          organizationId, type: 'fatigue', priority, isRead: false,
+          playerName: l.player.fullName, sourceType: 'PlayerLoad', sourceId: l.id,
+          title: `Seuil fatigue dépassé — ${l.player.fullName}`,
+          body: `Fatigue à ${l.fatigueScore}%. Charge actuelle: ${l.loadScore}%. ${priority === 'haute' ? 'Réduire charge 20% demain.' : 'Surveillance conseillée.'}`,
+        },
+        update: {},
+      }));
+    }
+
+    // 3. TrainingProgram notifications
+    for (const p of programs) {
+      const isRefuse = p.status === 'refuse';
+      upserts.push(this.prisma.prepNotification.upsert({
+        where: { organizationId_sourceType_sourceId: { organizationId, sourceType: 'TrainingProgram', sourceId: p.id } },
+        create: {
+          organizationId, type: isRefuse ? 'programme_refuse' : 'validation_coach',
+          priority: isRefuse ? 'moyenne' : 'basse', isRead: false,
+          sourceType: 'TrainingProgram', sourceId: p.id,
+          title: isRefuse ? `Programme refusé — ${p.name}` : `Programme validé — ${p.name}`,
+          body: isRefuse ? `Le programme "${p.name}" a été refusé. Objectif: ${p.objective}.` : `Le programme "${p.name}" a été validé. Durée: ${p.duration}. Intensité: ${p.intensity}.`,
+        },
+        update: {},
+      }));
+    }
+
+    // 4. Wellness — players without entry
+    const filledIds = new Set(wellnessEntries.map(e => e.playerId));
+    const missingCount = players.filter(p => !filledIds.has(p.id)).length;
+    if (missingCount > 0) {
+      const aggId = `wellness-missing-${organizationId}`;
+      upserts.push(this.prisma.prepNotification.upsert({
+        where: { organizationId_sourceType_sourceId: { organizationId, sourceType: 'WellnessAggregate', sourceId: aggId } },
+        create: {
+          organizationId, type: 'wellness', priority: 'moyenne', isRead: false,
+          sourceType: 'WellnessAggregate', sourceId: aggId,
+          title: 'Questionnaire wellness non rempli',
+          body: `${missingCount} joueur${missingCount > 1 ? 's' : ''} n'${missingCount > 1 ? 'ont' : 'a'} pas encore rempli le questionnaire wellness pré-entraînement.`,
+        },
+        update: { title: 'Questionnaire wellness non rempli', body: `${missingCount} joueur${missingCount > 1 ? 's' : ''} n'${missingCount > 1 ? 'ont' : 'a'} pas encore rempli le questionnaire wellness pré-entraînement.` },
+      }));
+    }
+
+    // 5. RecoverySession Terminé notifications
+    for (const s of recoverySessions) {
+      upserts.push(this.prisma.prepNotification.upsert({
+        where: { organizationId_sourceType_sourceId: { organizationId, sourceType: 'RecoverySession', sourceId: s.id } },
+        create: {
+          organizationId, type: 'recuperation', priority: 'basse', isRead: false,
+          playerName: s.player.fullName, sourceType: 'RecoverySession', sourceId: s.id,
+          title: `Session récupération terminée — ${s.player.fullName}`,
+          body: `${s.method} · ${s.duration}. Statut: disponible.`,
+        },
+        update: {},
+      }));
+    }
+
+    await Promise.all(upserts);
+  }
+
+  async getNotifications(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    await this.generateNotifications(organizationId);
+    return this.prisma.prepNotification.findMany({
+      where: { organizationId },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async markNotificationRead(user: JwtPayload, id: string) {
+    const organizationId = this.orgId(user);
+    return this.prisma.prepNotification.update({
+      where: { id, organizationId },
+      data: { isRead: true },
+    });
+  }
+
+  async markAllNotificationsRead(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    await this.prisma.prepNotification.updateMany({
+      where: { organizationId, isRead: false },
+      data: { isRead: true },
+    });
+    return { success: true };
+  }
+
+  async deleteNotification(user: JwtPayload, id: string) {
+    const organizationId = this.orgId(user);
+    await this.prisma.prepNotification.delete({ where: { id, organizationId } });
+    return { id };
+  }
+
+  // ─── Recovery ──────────────────────────────────────────────────
+  async getRecoverySessions(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const [sessions, players, loads, risks] = await Promise.all([
+      this.prisma.recoverySession.findMany({
+        where: { organizationId },
+        include: { player: { select: { fullName: true } } },
+        orderBy: { sessionDate: 'desc' },
+      }),
+      this.prisma.clubPlayer.findMany({
+        where: { organizationId },
+        select: { id: true, fullName: true, position: true },
+      }),
+      this.prisma.playerLoad.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.injuryRisk.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
+
+    // Build latest fatigue and max risk score per player
+    const loadMap = new Map<string, number>();
+    for (const l of loads) {
+      if (!loadMap.has(l.playerId)) loadMap.set(l.playerId, l.fatigueScore);
+    }
+    const riskMap = new Map<string, number>();
+    for (const r of risks) {
+      const prev = riskMap.get(r.playerId) ?? 0;
+      if (r.risk > prev) riskMap.set(r.playerId, r.risk);
+    }
+
+    // AI recommendations
+    const recs = players
+      .map(p => {
+        const fatigue   = loadMap.get(p.id) ?? 0;
+        const riskScore = riskMap.get(p.id) ?? 0;
+        let rec: string | null = null;
+        let urgency = 'low';
+        if (riskScore >= 75 || fatigue >= 80) { rec = 'Cryo + repos 48h'; urgency = 'high'; }
+        else if (riskScore >= 50 || fatigue >= 65) { rec = 'Massage + cryothérapie'; urgency = 'high'; }
+        else if (riskScore >= 30 || fatigue >= 50) { rec = 'Repos complet + kiné'; urgency = 'medium'; }
+        else if (fatigue >= 35) { rec = 'Hydratation renforcée'; urgency = 'low'; }
+        return rec ? { playerId: p.id, player: p.fullName, rec, urgency } : null;
+      })
+      .filter(Boolean);
+
+    return {
+      sessions: sessions.map(s => ({
+        id: s.id,
+        playerId: s.playerId,
+        playerName: s.player.fullName,
+        method: s.method,
+        date: s.sessionDate.toISOString().split('T')[0],
+        duration: s.duration,
+        status: s.status,
+        notes: s.notes ?? '',
+      })),
+      recommendations: recs,
+    };
+  }
+
+  async createRecoverySession(user: JwtPayload, body: {
+    playerId: string; method: string; date: string; duration: string; notes?: string;
+  }) {
+    const organizationId = this.orgId(user);
+    const player = await this.prisma.clubPlayer.findFirst({
+      where: { id: body.playerId, organizationId },
+      select: { fullName: true },
+    });
+    if (!player) throw new NotFoundException('Joueur introuvable');
+    const session = await this.prisma.recoverySession.create({
+      data: {
+        organizationId,
+        playerId: body.playerId,
+        method: body.method,
+        sessionDate: new Date(body.date),
+        duration: body.duration,
+        status: 'Planifié',
+        notes: body.notes,
+      },
+    });
+    return { ...session, playerName: player.fullName, date: session.sessionDate.toISOString().split('T')[0] };
+  }
+
+  async updateRecoverySession(user: JwtPayload, id: string, body: { status?: string; notes?: string }) {
+    const organizationId = this.orgId(user);
+    return this.prisma.recoverySession.update({
+      where: { id, organizationId },
+      data: body,
+    });
+  }
+
+  async deleteRecoverySession(user: JwtPayload, id: string) {
+    const organizationId = this.orgId(user);
+    await this.prisma.recoverySession.delete({ where: { id, organizationId } });
+    return { id };
   }
 
   // ─── Helpers ───────────────────────────────────────────────────
