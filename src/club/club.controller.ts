@@ -238,6 +238,13 @@ export class ClubController {
     return this.club.createInfrastructure(user, body);
   }
 
+  // ─── Préparateur — Dashboard ───────────────────────────────────
+
+  @Get('preparateur/dashboard')
+  getPreparateurDashboard(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getDashboard(user);
+  }
+
   // ─── Préparateur — Charge Équipe ───────────────────────────────
 
   @Get('preparateur/charge')

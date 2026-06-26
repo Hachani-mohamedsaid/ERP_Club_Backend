@@ -223,6 +223,97 @@ export class PreparateurService {
     };
   }
 
+  // ─── Dashboard Préparateur ─────────────────────────────────────
+  async getDashboard(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const DAYS_FR = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
+
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+    sevenDaysAgo.setHours(0, 0, 0, 0);
+
+    const [players, loads, injuryRisks, org] = await Promise.all([
+      this.prisma.clubPlayer.findMany({ where: { organizationId } }),
+      this.prisma.playerLoad.findMany({ where: { organizationId }, orderBy: { sessionDate: 'desc' } }),
+      this.prisma.injuryRisk.findMany({ where: { organizationId }, include: { player: { select: { fullName: true } } }, orderBy: { risk: 'desc' } }),
+      this.prisma.organization.findUnique({ where: { id: organizationId }, select: { clubName: true } }),
+    ]);
+
+    // Dernière charge par joueur
+    const latestByPlayer = new Map<string, (typeof loads)[0]>();
+    for (const load of loads) {
+      if (!latestByPlayer.has(load.playerId)) latestByPlayer.set(load.playerId, load);
+    }
+
+    const playerLoads = players.map((p) => {
+      const load = latestByPlayer.get(p.id);
+      const { load: defLoad, fatigue: defFatigue, recovery: defRecovery } = this.defaultScores(p.status);
+      const loadScore = load?.loadScore ?? defLoad;
+      const fatigueScore = load?.fatigueScore ?? defFatigue;
+      const recoveryScore = load?.recoveryScore ?? defRecovery;
+      return { id: p.id, name: p.fullName, status: p.status, loadScore, fatigueScore, recoveryScore, statut: computeStatus(loadScore, fatigueScore) };
+    });
+
+    const disponibles = players.filter((p) => p.status === 'DISPONIBLE').length;
+    const avgLoad = playerLoads.length > 0 ? Math.round(playerLoads.reduce((s, p) => s + p.loadScore, 0) / playerLoads.length) : 0;
+    const fatigueHigh = playerLoads.filter((p) => p.fatigueScore >= 55).length;
+
+    // Historique 7 jours
+    const recentLoads = loads.filter((l) => l.sessionDate >= sevenDaysAgo);
+    const loadHistory: { day: string; load: number }[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+      date.setHours(0, 0, 0, 0);
+      const nextDate = new Date(date);
+      nextDate.setDate(nextDate.getDate() + 1);
+      const dayLoads = recentLoads.filter((l) => l.sessionDate >= date && l.sessionDate < nextDate);
+      const dayAvg = dayLoads.length > 0 ? Math.round(dayLoads.reduce((s, l) => s + l.loadScore, 0) / dayLoads.length) : avgLoad;
+      loadHistory.push({ day: DAYS_FR[date.getDay()], load: dayAvg });
+    }
+
+    // Alertes depuis charge + risques blessures
+    const alertPlayerIds = new Set<string>();
+    const alerts: { id: string; player: string; message: string; severity: 'critical' | 'warning' | 'info'; time: string }[] = [];
+    const now = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+
+    for (const p of playerLoads) {
+      if (p.statut === 'Critique') {
+        alerts.push({ id: p.id, player: p.name, message: p.fatigueScore >= 75 ? 'Fatigue élevée' : 'Charge critique', severity: 'critical', time: now });
+        alertPlayerIds.add(p.id);
+      } else if (p.statut === 'Attention') {
+        alerts.push({ id: p.id, player: p.name, message: p.fatigueScore >= 55 ? 'Fatigue modérée' : 'Charge élevée', severity: 'warning', time: now });
+        alertPlayerIds.add(p.id);
+      }
+    }
+    for (const risk of injuryRisks) {
+      if (risk.risk >= 60 && !alertPlayerIds.has(risk.playerId)) {
+        alerts.push({ id: risk.id, player: risk.player.fullName, message: `Risque ${risk.zone}`, severity: risk.risk >= 80 ? 'critical' : 'warning', time: now });
+        alertPlayerIds.add(risk.playerId);
+      }
+    }
+
+    // Recommandations IA
+    const aiRecommendations: string[] = [];
+    const critiques = playerLoads.filter((p) => p.statut === 'Critique');
+    const attentions = playerLoads.filter((p) => p.statut === 'Attention');
+
+    if (critiques.length > 0) aiRecommendations.push(`Réduire charge — ${critiques[0].name} en état critique`);
+    if (injuryRisks.length > 0) aiRecommendations.push(`Suivi médical prioritaire — ${injuryRisks[0].player.fullName} (${injuryRisks[0].zone})`);
+    if (avgLoad > 75) aiRecommendations.push('Prévoir récupération active demain');
+    if (attentions.length > 0 && aiRecommendations.length < 3) aiRecommendations.push(`Surveillance accrue — ${attentions.length} joueur(s) en attention`);
+    if (aiRecommendations.length < 3) aiRecommendations.push('Programme récupération recommandé ce weekend');
+    if (aiRecommendations.length < 3) aiRecommendations.push('Maintenir la charge actuelle — équipe stable');
+
+    return {
+      user: { name: user.fullName, club: org?.clubName ?? 'Club', season: new Date().getFullYear().toString() },
+      kpis: { disponibles, avgLoad, fatigueHigh, riskCount: injuryRisks.length },
+      loadHistory,
+      alerts: alerts.slice(0, 5),
+      aiRecommendations: aiRecommendations.slice(0, 3),
+    };
+  }
+
   // ─── Risques Blessures ─────────────────────────────────────────
   async getInjuryRisks(user: JwtPayload) {
     const organizationId = this.orgId(user);
