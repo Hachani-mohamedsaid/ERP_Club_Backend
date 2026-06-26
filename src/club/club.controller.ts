@@ -362,6 +362,13 @@ export class ClubController {
     return this.preparateur.updatePresence(user, playerId, body.status);
   }
 
+  // ─── Préparateur — Comparaison ──────────────────────────────────
+
+  @Get('preparateur/comparison')
+  getComparisonPlayers(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getComparisonPlayers(user);
+  }
+
   // ─── Préparateur — Match Readiness ─────────────────────────────
 
   @Get('preparateur/match-readiness')

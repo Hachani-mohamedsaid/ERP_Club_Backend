@@ -595,6 +595,48 @@ export class PreparateurService {
     return { deleted: true };
   }
 
+  // ─── Comparison ─────────────────────────────────────────────────
+
+  async getComparisonPlayers(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+
+    const [players, loads] = await Promise.all([
+      this.prisma.clubPlayer.findMany({
+        where: { organizationId },
+        orderBy: { fullName: 'asc' },
+        select: { id: true, fullName: true, position: true, age: true, weight: true },
+      }),
+      this.prisma.playerLoad.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+        select: { playerId: true, loadScore: true, fatigueScore: true, recoveryScore: true },
+      }),
+    ]);
+
+    // keep only latest load per player
+    const loadMap = new Map<string, { loadScore: number; fatigueScore: number; recoveryScore: number }>();
+    for (const l of loads) {
+      if (!loadMap.has(l.playerId)) loadMap.set(l.playerId, l);
+    }
+
+    return players.map(p => {
+      const load = loadMap.get(p.id) ?? { loadScore: 50, fatigueScore: 30, recoveryScore: 70 };
+      return {
+        id:       p.id,
+        name:     p.fullName,
+        position: p.position,
+        age:      p.age,
+        weight:   p.weight ?? '75 kg',
+        charge:   load.loadScore,
+        fatigue:  load.fatigueScore,
+        recovery: load.recoveryScore,
+        wellness: load.recoveryScore,
+        distance: Math.round(load.loadScore / 10),
+        sprints:  Math.round(load.loadScore / 3.5),
+      };
+    });
+  }
+
   // ─── Match Readiness ────────────────────────────────────────────
 
   async getMatchReadiness(user: JwtPayload) {
