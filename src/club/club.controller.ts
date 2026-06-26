@@ -16,13 +16,17 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { JwtPayload } from '../auth/jwt-payload.interface';
 import { ClubService } from './club.service';
+import { PreparateurService } from './preparateur.service';
 import { PermissionsGuard } from './guards/permissions.guard';
 import { RequirePermission } from './decorators/require-permission.decorator';
 
 @Controller('club')
 @UseGuards(JwtAuthGuard)
 export class ClubController {
-  constructor(private readonly club: ClubService) {}
+  constructor(
+    private readonly club: ClubService,
+    private readonly preparateur: PreparateurService,
+  ) {}
 
   private ip(req: Request) {
     return (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ?? req.ip;
@@ -232,5 +236,36 @@ export class ClubController {
   @RequirePermission('Parametres', 'create')
   createInfrastructure(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
     return this.club.createInfrastructure(user, body);
+  }
+
+  // ─── Préparateur — Charge Équipe ───────────────────────────────
+
+  @Get('preparateur/charge')
+  getChargeEquipe(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getChargeEquipe(user);
+  }
+
+  @Patch('preparateur/charge/:playerId/reduce')
+  reducePlayerLoad(@CurrentUser() user: JwtPayload, @Param('playerId') playerId: string) {
+    return this.preparateur.adjustPlayerLoad(user, playerId, -10);
+  }
+
+  @Patch('preparateur/charge/:playerId/increase')
+  increasePlayerLoad(@CurrentUser() user: JwtPayload, @Param('playerId') playerId: string) {
+    return this.preparateur.adjustPlayerLoad(user, playerId, +10);
+  }
+
+  @Put('preparateur/charge/:playerId')
+  setPlayerLoad(
+    @CurrentUser() user: JwtPayload,
+    @Param('playerId') playerId: string,
+    @Body() body: { loadScore: number; fatigueScore: number; recoveryScore?: number; notes?: string },
+  ) {
+    return this.preparateur.setPlayerLoad(user, playerId, body);
+  }
+
+  @Get('preparateur/charge/:playerId/history')
+  getPlayerLoadHistory(@CurrentUser() user: JwtPayload, @Param('playerId') playerId: string) {
+    return this.preparateur.getPlayerLoadHistory(user, playerId);
   }
 }

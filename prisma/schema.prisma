@@ -7,6 +7,473 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model User {
+  id                 String          @id @default(uuid())
+  email              String          @unique
+  createdAt          DateTime        @default(now())
+  acceptPrivacy      Boolean         @default(false)
+  acceptTerms        Boolean         @default(false)
+  fullName           String
+  isActive           Boolean         @default(true)
+  passwordHash       String
+  phone              String
+  role               UserRole        @default(ADMIN_CLUB)
+  updatedAt          DateTime        @updatedAt
+  clubMemberRole     ClubMemberRole?
+  organizationId     String?
+  ownedOrganization  Organization?   @relation("OrganizationOwner")
+  memberOrganization Organization?   @relation("OrganizationMembers", fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model Organization {
+  id               String                    @id @default(uuid())
+  clubName         String
+  country          String
+  league           String
+  logoUrl          String?
+  invitationCode   String?
+  ownerId          String                    @unique
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+  status           OrganizationStatus        @default(TRIAL)
+  trialEndsAt      DateTime?
+  analysteModules  AnalysteModuleData[]
+  auditLogs        ClubAuditLog[]
+  calendarEvents   ClubCalendarEvent[]
+  contracts        ClubContract[]
+  dashboardStats   ClubDashboardStats?
+  financeEntries   ClubFinanceEntry[]
+  infrastructures  ClubInfrastructure[]
+  injuries         ClubInjury[]
+  members          ClubMember[]
+  notifications    ClubNotification[]
+  permissions      ClubPermission[]
+  players          ClubPlayer[]
+  staff            ClubStaff[]
+  owner            User                      @relation("OrganizationOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  profile          OrganizationProfile?
+  subscription     OrganizationSubscription?
+  platformPayments PlatformPayment[]
+  supportTickets   PlatformSupportTicket[]
+  PlayerAward      PlayerAward[]
+  PlayerChemistry  PlayerChemistry[]
+  PlayerDocument   PlayerDocument[]
+  PlayerMatchStat  PlayerMatchStat[]
+  PlayerTransfer   PlayerTransfer[]
+  playerLoads      PlayerLoad[]
+  authUsers        User[]                    @relation("OrganizationMembers")
+}
+
+model AnalysteModuleData {
+  id             String       @id @default(uuid())
+  organizationId String
+  moduleKey      String
+  payload        Json
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, moduleKey])
+  @@index([organizationId])
+}
+
+model OrganizationProfile {
+  id             String       @id @default(uuid())
+  organizationId String       @unique
+  abbreviation   String?
+  officialEmail  String?
+  phone          String?
+  website        String?
+  stadium        String?
+  address        String?
+  city           String?
+  primaryColor   String       @default("#FF6B57")
+  secondaryColor String       @default("#070B1F")
+  notifyEmail    Boolean      @default(true)
+  notifySms      Boolean      @default(false)
+  notifyPush     Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model ClubMember {
+  id             String         @id @default(uuid())
+  organizationId String
+  fullName       String
+  email          String
+  clubRole       ClubMemberRole @default(COACH)
+  status         MemberStatus   @default(ACTIF)
+  lastLoginAt    DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  clubPlayerId   String?        @unique
+  clubPlayer     ClubPlayer?    @relation(fields: [clubPlayerId], references: [id])
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, email])
+}
+
+model ClubPermission {
+  id             String         @id @default(uuid())
+  organizationId String
+  module         String
+  clubRole       ClubMemberRole
+  canRead        Boolean        @default(false)
+  canCreate      Boolean        @default(false)
+  canUpdate      Boolean        @default(false)
+  canDelete      Boolean        @default(false)
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, module, clubRole])
+}
+
+model ClubNotification {
+  id             String       @id @default(uuid())
+  organizationId String
+  title          String
+  body           String
+  type           NotifType    @default(INFO)
+  level          NotifLevel   @default(INFO)
+  isRead         Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model ClubAuditLog {
+  id             String          @id @default(uuid())
+  organizationId String
+  userName       String
+  userRole       String
+  action         String
+  entity         String
+  details        String
+  type           AuditActionType
+  ipAddress      String?
+  createdAt      DateTime        @default(now())
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model ClubDashboardStats {
+  id               String       @id @default(uuid())
+  organizationId   String       @unique
+  playersCount     Int          @default(0)
+  staffCount       Int          @default(0)
+  budgetRemaining  Int          @default(0)
+  payrollTotal     Int          @default(0)
+  injuredCount     Int          @default(0)
+  contractsToRenew Int          @default(0)
+  budgetUsedPct    Int          @default(0)
+  budgetChart      Json
+  alerts           Json
+  aiSummary        Json
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model ClubPlayer {
+  id              String            @id @default(uuid())
+  organizationId  String
+  fullName        String
+  position        String
+  age             Int               @default(0)
+  ovr             Int               @default(0)
+  marketValue     String            @default("0")
+  salaryMonthly   Int               @default(0)
+  status          PlayerStatus      @default(DISPONIBLE)
+  radar           Json?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  goals           Int               @default(0)
+  birthDate       String?
+  height          String?
+  jerseyNumber    Int?              @default(0)
+  nationality     String?           @default("Tunisie")
+  photoUrl        String?
+  stats           Json?
+  strongFoot      String?           @default("Droit")
+  weight          String?
+  linkedMember    ClubMember?
+  organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  PlayerAward     PlayerAward[]
+  PlayerDocument  PlayerDocument[]
+  PlayerMatchStat PlayerMatchStat[]
+  playerLoads     PlayerLoad[]
+}
+
+model ClubStaff {
+  id             String       @id @default(uuid())
+  organizationId String
+  fullName       String
+  role           String
+  salaryMonthly  Int          @default(0)
+  contractEnd    DateTime?
+  isAvailable    Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model ClubFinanceEntry {
+  id             String           @id @default(uuid())
+  organizationId String
+  label          String
+  amount         Int
+  type           FinanceEntryType
+  category       String
+  entryDate      DateTime         @default(now())
+  createdAt      DateTime         @default(now())
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model ClubContract {
+  id             String       @id @default(uuid())
+  organizationId String
+  holderName     String
+  startDate      DateTime
+  endDate        DateTime
+  salaryMonthly  Int          @default(0)
+  bonus          Int          @default(0)
+  releaseClause  String?
+  consumedPct    Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model ClubCalendarEvent {
+  id             String            @id @default(uuid())
+  organizationId String
+  title          String
+  eventDate      DateTime
+  eventTime      String?
+  eventType      CalendarEventType @default(ENTRAINEMENT)
+  location       String?
+  createdAt      DateTime          @default(now())
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model ClubInjury {
+  id             String       @id @default(uuid())
+  organizationId String
+  playerName     String
+  injuryType     String
+  bodyPart       String?
+  returnDate     DateTime?
+  riskScore      Int          @default(0)
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model ClubInfrastructure {
+  id              String            @id @default(uuid())
+  organizationId  String
+  name            String
+  infraType       String
+  status          String            @default("Bon")
+  capacity        String?
+  occupationPct   Int               @default(0)
+  nextMaintenance DateTime?
+  createdAt       DateTime          @default(now())
+  organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  maintenances    ClubMaintenance[]
+}
+
+model ClubMaintenance {
+  id               String             @id @default(uuid())
+  infrastructureId String
+  taskType         String
+  scheduledDate    DateTime
+  createdAt        DateTime           @default(now())
+  infrastructure   ClubInfrastructure @relation(fields: [infrastructureId], references: [id], onDelete: Cascade)
+}
+
+model InvitationCode {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  isActive  Boolean  @default(true)
+  maxUses   Int?
+  usedCount Int      @default(0)
+  createdAt DateTime @default(now())
+}
+
+model Plan {
+  id            String                     @id @default(uuid())
+  code          String                     @unique
+  name          String
+  priceMonthly  Int
+  currency      String                     @default("TND")
+  features      String[]
+  isActive      Boolean                    @default(true)
+  sortOrder     Int                        @default(0)
+  createdAt     DateTime                   @default(now())
+  updatedAt     DateTime                   @updatedAt
+  subscriptions OrganizationSubscription[]
+}
+
+model OrganizationSubscription {
+  id                 String             @id @default(uuid())
+  organizationId     String             @unique
+  planId             String
+  status             SubscriptionStatus @default(TRIALING)
+  trialEndsAt        DateTime?
+  currentPeriodStart DateTime           @default(now())
+  currentPeriodEnd   DateTime
+  cancelledAt        DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan               Plan               @relation(fields: [planId], references: [id])
+}
+
+model PlatformPayment {
+  id             String        @id @default(uuid())
+  organizationId String
+  invoiceNumber  String        @unique
+  amount         Int
+  currency       String        @default("TND")
+  method         String?
+  status         PaymentStatus @default(PENDING)
+  paidAt         DateTime?
+  periodStart    DateTime?
+  periodEnd      DateTime?
+  notes          String?
+  createdAt      DateTime      @default(now())
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model PlatformSettings {
+  id               String   @id @default("default")
+  platformName     String   @default("ODIN ERP")
+  platformUrl      String   @default("https://odin.erp.tn")
+  contactEmail     String   @default("admin@odin.erp.tn")
+  supportPhone     String   @default("+216 71 000 000")
+  timezone         String   @default("Africa/Tunis")
+  defaultLanguage  String   @default("fr")
+  currency         String   @default("TND")
+  maintenanceMode  Boolean  @default(false)
+  openRegistration Boolean  @default(true)
+  debugMode        Boolean  @default(false)
+  trialDays        Int      @default(14)
+  extendedSettings Json?
+  updatedAt        DateTime @updatedAt
+}
+
+model PlatformSupportTicket {
+  id             String                @id @default(uuid())
+  ticketNumber   String                @unique
+  organizationId String?
+  clubName       String
+  subject        String
+  description    String?
+  priority       SupportTicketPriority @default(NORMAL)
+  status         SupportTicketStatus   @default(OPEN)
+  agentName      String?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+  organization   Organization?         @relation(fields: [organizationId], references: [id])
+}
+
+model PlatformBlockedIp {
+  id        String   @id @default(uuid())
+  ipAddress String   @unique
+  reason    String
+  country   String?
+  createdAt DateTime @default(now())
+}
+
+model PlayerAward {
+  id             String       @id
+  organizationId String
+  playerId       String
+  title          String
+  season         String
+  icon           String       @default("🏆")
+  color          String       @default("#d99a1f")
+  awardType      String       @default("award")
+  year           String?
+  club           String?
+  event          String?
+  createdAt      DateTime     @default(now())
+  Organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ClubPlayer     ClubPlayer   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, playerId])
+}
+
+model PlayerChemistry {
+  id             String       @id
+  organizationId String
+  player1Id      String
+  player1Name    String
+  player2Id      String
+  player2Name    String
+  chemistry      Int          @default(75)
+  createdAt      DateTime     @default(now())
+  Organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, player1Id, player2Id])
+  @@index([organizationId])
+}
+
+model PlayerDocument {
+  id             String       @id
+  organizationId String
+  playerId       String
+  name           String
+  docType        String       @default("Personnel")
+  docDate        String
+  size           String
+  fileData       String?
+  createdAt      DateTime     @default(now())
+  Organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ClubPlayer     ClubPlayer   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, playerId])
+}
+
+model PlayerMatchStat {
+  id             String       @id
+  organizationId String
+  playerId       String
+  matchDate      DateTime
+  opponent       String
+  result         String       @default("")
+  goals          Int          @default(0)
+  assists        Int          @default(0)
+  minutes        Int          @default(90)
+  rating         Float        @default(6.0)
+  distance       Float        @default(0)
+  sprints        Int          @default(0)
+  passAccuracy   Int          @default(0)
+  topSpeed       Float        @default(0)
+  keyPasses      Int          @default(0)
+  yellowCards    Int          @default(0)
+  redCards       Int          @default(0)
+  heatmapData    Json?
+  createdAt      DateTime     @default(now())
+  Organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ClubPlayer     ClubPlayer   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, playerId])
+}
+
+model PlayerTransfer {
+  id             String       @id
+  organizationId String
+  playerName     String
+  transferType   String
+  club           String
+  value          String
+  status         String
+  probability    Int          @default(0)
+  createdAt      DateTime     @default(now())
+  Organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
 enum UserRole {
   ADMIN_CLUB
   SUPER_ADMIN
@@ -14,14 +481,14 @@ enum UserRole {
 
 enum ClubMemberRole {
   CLUB_ADMIN
-  RESPONSABLE
-  PREPARATEUR
   COACH
   MEDECIN
+  RESPONSABLE_FINANCIER
   SCOUT
   ANALYSTE
+  RESPONSABLE
+  PREPARATEUR
   RECRUTEUR
-  RESPONSABLE_FINANCIER
   JOUEUR
 }
 
@@ -108,360 +575,21 @@ enum SupportTicketPriority {
   NORMAL
 }
 
-model User {
-  id                 String          @id @default(uuid())
-  email              String          @unique
-  passwordHash       String
-  fullName           String
-  phone              String
-  role               UserRole        @default(ADMIN_CLUB)
-  clubMemberRole     ClubMemberRole?
-  organizationId     String?
-  memberOrganization Organization?   @relation("OrganizationMembers", fields: [organizationId], references: [id], onDelete: Cascade)
-  acceptTerms        Boolean         @default(false)
-  acceptPrivacy      Boolean         @default(false)
-  isActive           Boolean         @default(true)
-  ownedOrganization  Organization?   @relation("OrganizationOwner")
-  createdAt          DateTime        @default(now())
-  updatedAt          DateTime        @updatedAt
-}
-
-model Organization {
-  id              String               @id @default(uuid())
-  clubName        String
-  country         String
-  league          String
-  logoUrl         String?
-  invitationCode  String?
-  status          OrganizationStatus   @default(TRIAL)
-  trialEndsAt     DateTime?
-  ownerId         String               @unique
-  owner           User                 @relation("OrganizationOwner", fields: [ownerId], references: [id], onDelete: Cascade)
-  authUsers       User[]               @relation("OrganizationMembers")
-  dashboardStats  ClubDashboardStats?
-  profile         OrganizationProfile?
-  members         ClubMember[]
-  permissions     ClubPermission[]
-  notifications   ClubNotification[]
-  auditLogs       ClubAuditLog[]
-  players         ClubPlayer[]
-  staff           ClubStaff[]
-  financeEntries  ClubFinanceEntry[]
-  contracts       ClubContract[]
-  calendarEvents  ClubCalendarEvent[]
-  injuries        ClubInjury[]
-  infrastructures ClubInfrastructure[]
-  subscription    OrganizationSubscription?
-  platformPayments PlatformPayment[]
-  supportTickets  PlatformSupportTicket[]
-  analysteModules AnalysteModuleData[]
-  createdAt       DateTime             @default(now())
-  updatedAt       DateTime             @updatedAt
-}
-
-model AnalysteModuleData {
+model PlayerLoad {
   id             String       @id @default(uuid())
   organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  moduleKey      String
-  payload        Json
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-
-  @@unique([organizationId, moduleKey])
-  @@index([organizationId])
-}
-
-model OrganizationProfile {
-  id                String       @id @default(uuid())
-  organizationId    String       @unique
-  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  abbreviation      String?
-  officialEmail     String?
-  phone             String?
-  website           String?
-  stadium           String?
-  address           String?
-  city              String?
-  primaryColor      String       @default("#FF6B57")
-  secondaryColor    String       @default("#070B1F")
-  notifyEmail       Boolean      @default(true)
-  notifySms         Boolean      @default(false)
-  notifyPush        Boolean      @default(true)
-  createdAt         DateTime     @default(now())
-  updatedAt         DateTime     @updatedAt
-}
-
-model ClubMember {
-  id             String         @id @default(uuid())
-  organizationId String
-  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  fullName       String
-  email          String
-  clubRole       ClubMemberRole @default(COACH)
-  status         MemberStatus   @default(ACTIF)
-  clubPlayerId   String?        @unique
-  clubPlayer     ClubPlayer?    @relation(fields: [clubPlayerId], references: [id], onDelete: SetNull)
-  lastLoginAt    DateTime?
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
-
-  @@unique([organizationId, email])
-}
-
-model ClubPermission {
-  id             String         @id @default(uuid())
-  organizationId String
-  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  module         String
-  clubRole       ClubMemberRole
-  canRead        Boolean        @default(false)
-  canCreate      Boolean        @default(false)
-  canUpdate      Boolean        @default(false)
-  canDelete      Boolean        @default(false)
-
-  @@unique([organizationId, module, clubRole])
-}
-
-model ClubNotification {
-  id             String       @id @default(uuid())
-  organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  title          String
-  body           String
-  type           NotifType    @default(INFO)
-  level          NotifLevel   @default(INFO)
-  isRead         Boolean      @default(false)
-  createdAt      DateTime     @default(now())
-}
-
-model ClubAuditLog {
-  id             String          @id @default(uuid())
-  organizationId String
-  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  userName       String
-  userRole       String
-  action         String
-  entity         String
-  details        String
-  type           AuditActionType
-  ipAddress      String?
-  createdAt      DateTime        @default(now())
-}
-
-model ClubDashboardStats {
-  id               String       @id @default(uuid())
-  organizationId   String       @unique
-  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  playersCount     Int          @default(0)
-  staffCount       Int          @default(0)
-  budgetRemaining  Int          @default(0)
-  payrollTotal     Int          @default(0)
-  injuredCount     Int          @default(0)
-  contractsToRenew Int          @default(0)
-  budgetUsedPct    Int          @default(0)
-  budgetChart      Json
-  alerts           Json
-  aiSummary        Json
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
-}
-
-model ClubPlayer {
-  id             String       @id @default(uuid())
-  organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  fullName       String
-  position       String
-  age            Int          @default(0)
-  ovr            Int          @default(0)
-  goals          Int          @default(0)
-  marketValue    String       @default("0")
-  salaryMonthly  Int          @default(0)
-  status         PlayerStatus @default(DISPONIBLE)
-  radar          Json?
-  linkedMember   ClubMember?
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-}
-
-model ClubStaff {
-  id             String       @id @default(uuid())
-  organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  fullName       String
-  role           String
-  salaryMonthly  Int          @default(0)
-  contractEnd    DateTime?
-  isAvailable    Boolean      @default(true)
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-}
-
-model ClubFinanceEntry {
-  id             String           @id @default(uuid())
-  organizationId String
-  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  label          String
-  amount         Int
-  type           FinanceEntryType
-  category       String
-  entryDate      DateTime         @default(now())
-  createdAt      DateTime         @default(now())
-}
-
-model ClubContract {
-  id             String    @id @default(uuid())
-  organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  holderName     String
-  startDate      DateTime
-  endDate        DateTime
-  salaryMonthly  Int       @default(0)
-  bonus          Int       @default(0)
-  releaseClause  String?
-  consumedPct    Int       @default(0)
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-}
-
-model ClubCalendarEvent {
-  id             String            @id @default(uuid())
-  organizationId String
-  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  title          String
-  eventDate      DateTime
-  eventTime      String?
-  eventType      CalendarEventType @default(ENTRAINEMENT)
-  location       String?
-  createdAt      DateTime          @default(now())
-}
-
-model ClubInjury {
-  id             String       @id @default(uuid())
-  organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  playerName     String
-  injuryType     String
-  bodyPart       String?
-  returnDate     DateTime?
-  riskScore      Int          @default(0)
-  createdAt      DateTime     @default(now())
-}
-
-model ClubInfrastructure {
-  id              String            @id @default(uuid())
-  organizationId  String
-  organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  name            String
-  infraType       String
-  status          String            @default("Bon")
-  capacity        String?
-  occupationPct   Int               @default(0)
-  nextMaintenance DateTime?
-  maintenances    ClubMaintenance[]
-  createdAt       DateTime          @default(now())
-}
-
-model ClubMaintenance {
-  id               String             @id @default(uuid())
-  infrastructureId String
-  infrastructure   ClubInfrastructure @relation(fields: [infrastructureId], references: [id], onDelete: Cascade)
-  taskType         String
-  scheduledDate    DateTime
-  createdAt        DateTime           @default(now())
-}
-
-model InvitationCode {
-  id        String   @id @default(uuid())
-  code      String   @unique
-  isActive  Boolean  @default(true)
-  maxUses   Int?
-  usedCount Int      @default(0)
-  createdAt DateTime @default(now())
-}
-
-model Plan {
-  id            String                   @id @default(uuid())
-  code          String                   @unique
-  name          String
-  priceMonthly  Int
-  currency      String                   @default("TND")
-  features      String[]
-  isActive      Boolean                  @default(true)
-  sortOrder     Int                      @default(0)
-  subscriptions OrganizationSubscription[]
-  createdAt     DateTime                 @default(now())
-  updatedAt     DateTime                 @updatedAt
-}
-
-model OrganizationSubscription {
-  id                 String             @id @default(uuid())
-  organizationId     String             @unique
-  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  planId             String
-  plan               Plan               @relation(fields: [planId], references: [id])
-  status             SubscriptionStatus @default(TRIALING)
-  trialEndsAt        DateTime?
-  currentPeriodStart DateTime           @default(now())
-  currentPeriodEnd   DateTime
-  cancelledAt        DateTime?
-  createdAt          DateTime           @default(now())
-  updatedAt          DateTime           @updatedAt
-}
-
-model PlatformPayment {
-  id             String        @id @default(uuid())
-  organizationId String
-  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  invoiceNumber  String        @unique
-  amount         Int
-  currency       String        @default("TND")
-  method         String?
-  status         PaymentStatus @default(PENDING)
-  paidAt         DateTime?
-  periodStart    DateTime?
-  periodEnd      DateTime?
+  playerId       String
+  sessionDate    DateTime     @default(now())
+  loadScore      Int          @default(50)
+  fatigueScore   Int          @default(30)
+  recoveryScore  Int          @default(70)
+  sessionType    String       @default("ENTRAINEMENT")
   notes          String?
-  createdAt      DateTime      @default(now())
-}
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  player         ClubPlayer   @relation(fields: [playerId], references: [id], onDelete: Cascade)
 
-model PlatformSettings {
-  id              String   @id @default("default")
-  platformName    String   @default("ODIN ERP")
-  platformUrl     String   @default("https://odin.erp.tn")
-  contactEmail    String   @default("admin@odin.erp.tn")
-  supportPhone    String   @default("+216 71 000 000")
-  timezone        String   @default("Africa/Tunis")
-  defaultLanguage String   @default("fr")
-  currency        String   @default("TND")
-  maintenanceMode Boolean  @default(false)
-  openRegistration Boolean @default(true)
-  debugMode       Boolean  @default(false)
-  trialDays       Int      @default(14)
-  extendedSettings Json?
-  updatedAt       DateTime @updatedAt
-}
-
-model PlatformSupportTicket {
-  id             String                @id @default(uuid())
-  ticketNumber   String                @unique
-  organizationId String?
-  organization   Organization?         @relation(fields: [organizationId], references: [id], onDelete: SetNull)
-  clubName       String
-  subject        String
-  description    String?
-  priority       SupportTicketPriority @default(NORMAL)
-  status         SupportTicketStatus   @default(OPEN)
-  agentName      String?
-  createdAt      DateTime              @default(now())
-  updatedAt      DateTime              @updatedAt
-}
-
-model PlatformBlockedIp {
-  id        String   @id @default(uuid())
-  ipAddress String   @unique
-  reason    String
-  country   String?
-  createdAt DateTime @default(now())
+  @@index([organizationId])
+  @@index([playerId])
 }
