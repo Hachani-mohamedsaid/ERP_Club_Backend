@@ -805,6 +805,98 @@ export class PreparateurService {
     return { playerId, ...body };
   }
 
+  // ─── Rapports ──────────────────────────────────────────────────
+  async getReports(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const [players, allLoads, risks] = await Promise.all([
+      this.prisma.clubPlayer.findMany({
+        where: { organizationId },
+        select: { id: true, fullName: true, position: true, photoUrl: true },
+        orderBy: { fullName: 'asc' },
+      }),
+      this.prisma.playerLoad.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.injuryRisk.findMany({
+        where: { organizationId },
+        select: { playerId: true, risk: true },
+      }),
+    ]);
+
+    const MONTHS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'];
+
+    // Group loads by player
+    const loadsByPlayer = new Map<string, typeof allLoads>();
+    for (const l of allLoads) {
+      if (!loadsByPlayer.has(l.playerId)) loadsByPlayer.set(l.playerId, []);
+      loadsByPlayer.get(l.playerId)!.push(l);
+    }
+
+    // Max risk per player
+    const riskMap = new Map<string, number>();
+    for (const r of risks) {
+      const prev = riskMap.get(r.playerId) ?? 0;
+      if (r.risk > prev) riskMap.set(r.playerId, r.risk);
+    }
+
+    const reports = players.map(p => {
+      const loads   = loadsByPlayer.get(p.id) ?? [];
+      const latest  = loads[0];
+      const charge  = latest?.loadScore    ?? 0;
+      const fatigue = latest?.fatigueScore ?? 0;
+      const speed   = Math.round(Math.min(100, charge * 0.85 + (100 - fatigue) * 0.15));
+      const endurance = Math.round(Math.min(100, (latest?.recoveryScore ?? 0)));
+      const riskScore = riskMap.get(p.id) ?? 0;
+      const type = riskScore >= 50 ? 'Risque blessure' : 'Hebdomadaire';
+      const date = latest ? latest.createdAt.toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+
+      // Evolution: last 6 load records → one point per record
+      const evolution = [...loads].reverse().slice(-6).map(l => ({
+        month: MONTHS[l.createdAt.getMonth()],
+        speed: Math.round(Math.min(100, l.loadScore * 0.85 + (100 - l.fatigueScore) * 0.15)),
+        endurance: Math.round(Math.min(100, l.recoveryScore)),
+      }));
+
+      return {
+        id: p.id,
+        playerId: p.id,
+        player: p.fullName,
+        position: p.position ?? '',
+        photoUrl: p.photoUrl ?? null,
+        date,
+        type,
+        charge,
+        fatigue,
+        speed,
+        endurance,
+        evolution,
+      };
+    });
+
+    // Team summary entry
+    const filledReports = reports.filter(r => r.charge > 0);
+    if (filledReports.length > 0) {
+      const avg = (arr: number[]) => Math.round(arr.reduce((s, v) => s + v, 0) / arr.length);
+      reports.unshift({
+        id: 'equipe',
+        playerId: '',
+        player: 'Équipe',
+        position: '',
+        photoUrl: null,
+        date: new Date().toISOString().split('T')[0],
+        type: 'Synthèse mensuelle',
+        charge: avg(filledReports.map(r => r.charge)),
+        fatigue: avg(filledReports.map(r => r.fatigue)),
+        speed: avg(filledReports.map(r => r.speed)),
+        endurance: avg(filledReports.map(r => r.endurance)),
+        evolution: [],
+      });
+    }
+
+    return reports;
+  }
+
   // ─── Recovery ──────────────────────────────────────────────────
   async getRecoverySessions(user: JwtPayload) {
     const organizationId = this.orgId(user);

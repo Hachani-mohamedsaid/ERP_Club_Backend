@@ -421,6 +421,11 @@ export class ClubController {
     return this.preparateur.upsertWellness(user, playerId, body);
   }
 
+  @Get('preparateur/reports')
+  getReports(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getReports(user);
+  }
+
   @Get('preparateur/recovery')
   getRecoverySessions(@CurrentUser() user: JwtPayload) {
     return this.preparateur.getRecoverySessions(user);
