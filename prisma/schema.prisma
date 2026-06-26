@@ -61,6 +61,7 @@ model Organization {
   PlayerMatchStat  PlayerMatchStat[]
   PlayerTransfer   PlayerTransfer[]
   playerLoads      PlayerLoad[]
+  injuryRisks      InjuryRisk[]
   authUsers        User[]                    @relation("OrganizationMembers")
 }
 
@@ -200,6 +201,7 @@ model ClubPlayer {
   PlayerDocument  PlayerDocument[]
   PlayerMatchStat PlayerMatchStat[]
   playerLoads     PlayerLoad[]
+  injuryRisks     InjuryRisk[]
 }
 
 model ClubStaff {
@@ -585,6 +587,24 @@ model PlayerLoad {
   recoveryScore  Int          @default(70)
   sessionType    String       @default("ENTRAINEMENT")
   notes          String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  player         ClubPlayer   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([playerId])
+}
+
+model InjuryRisk {
+  id             String       @id @default(uuid())
+  organizationId String
+  playerId       String
+  zone           String
+  risk           Int          @default(50)
+  recommendation String[]
+  medicalComment String?
+  medicalAuthor  String?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)

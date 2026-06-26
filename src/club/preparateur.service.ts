@@ -223,6 +223,67 @@ export class PreparateurService {
     };
   }
 
+  // ─── Risques Blessures ─────────────────────────────────────────
+  async getInjuryRisks(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const rows = await this.prisma.injuryRisk.findMany({
+      where: { organizationId },
+      include: { player: { select: { fullName: true } } },
+      orderBy: { risk: 'desc' },
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      playerId: r.playerId,
+      name: r.player.fullName,
+      zone: r.zone,
+      risk: r.risk,
+      recommendation: r.recommendation,
+      medicalComment: r.medicalComment ?? undefined,
+      medicalAuthor: r.medicalAuthor ?? undefined,
+      createdAt: r.createdAt.toISOString(),
+    }));
+  }
+
+  async createInjuryRisk(
+    user: JwtPayload,
+    body: { playerId: string; zone: string; risk: number; recommendation: string[]; medicalComment?: string; medicalAuthor?: string },
+  ) {
+    const organizationId = this.orgId(user);
+    const player = await this.prisma.clubPlayer.findFirst({ where: { id: body.playerId, organizationId } });
+    if (!player) throw new NotFoundException('Joueur introuvable.');
+
+    const row = await this.prisma.injuryRisk.create({
+      data: { organizationId, playerId: body.playerId, zone: body.zone, risk: body.risk, recommendation: body.recommendation, medicalComment: body.medicalComment, medicalAuthor: body.medicalAuthor },
+      include: { player: { select: { fullName: true } } },
+    });
+    return { id: row.id, playerId: row.playerId, name: row.player.fullName, zone: row.zone, risk: row.risk, recommendation: row.recommendation, medicalComment: row.medicalComment ?? undefined, medicalAuthor: row.medicalAuthor ?? undefined };
+  }
+
+  async updateInjuryRisk(
+    user: JwtPayload,
+    id: string,
+    body: { zone?: string; risk?: number; recommendation?: string[]; medicalComment?: string; medicalAuthor?: string },
+  ) {
+    const organizationId = this.orgId(user);
+    const existing = await this.prisma.injuryRisk.findFirst({ where: { id, organizationId } });
+    if (!existing) throw new NotFoundException('Risque introuvable.');
+
+    const row = await this.prisma.injuryRisk.update({
+      where: { id },
+      data: { zone: body.zone, risk: body.risk, recommendation: body.recommendation, medicalComment: body.medicalComment, medicalAuthor: body.medicalAuthor },
+      include: { player: { select: { fullName: true } } },
+    });
+    return { id: row.id, playerId: row.playerId, name: row.player.fullName, zone: row.zone, risk: row.risk, recommendation: row.recommendation, medicalComment: row.medicalComment ?? undefined, medicalAuthor: row.medicalAuthor ?? undefined };
+  }
+
+  async deleteInjuryRisk(user: JwtPayload, id: string) {
+    const organizationId = this.orgId(user);
+    const existing = await this.prisma.injuryRisk.findFirst({ where: { id, organizationId } });
+    if (!existing) throw new NotFoundException('Risque introuvable.');
+    await this.prisma.injuryRisk.delete({ where: { id } });
+    return { deleted: true };
+  }
+
   // ─── Helpers ───────────────────────────────────────────────────
   private defaultScores(playerStatus: string) {
     switch (playerStatus) {

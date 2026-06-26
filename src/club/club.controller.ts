@@ -268,4 +268,33 @@ export class ClubController {
   getPlayerLoadHistory(@CurrentUser() user: JwtPayload, @Param('playerId') playerId: string) {
     return this.preparateur.getPlayerLoadHistory(user, playerId);
   }
+
+  // ─── Préparateur — Risques Blessures ───────────────────────────
+
+  @Get('preparateur/injury-risks')
+  getInjuryRisks(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getInjuryRisks(user);
+  }
+
+  @Post('preparateur/injury-risks')
+  createInjuryRisk(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { playerId: string; zone: string; risk: number; recommendation: string[]; medicalComment?: string; medicalAuthor?: string },
+  ) {
+    return this.preparateur.createInjuryRisk(user, body);
+  }
+
+  @Patch('preparateur/injury-risks/:id')
+  updateInjuryRisk(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { zone?: string; risk?: number; recommendation?: string[]; medicalComment?: string; medicalAuthor?: string },
+  ) {
+    return this.preparateur.updateInjuryRisk(user, id, body);
+  }
+
+  @Delete('preparateur/injury-risks/:id')
+  deleteInjuryRisk(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.preparateur.deleteInjuryRisk(user, id);
+  }
 }
