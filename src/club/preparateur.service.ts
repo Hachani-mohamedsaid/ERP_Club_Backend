@@ -808,7 +808,7 @@ export class PreparateurService {
   // ─── Rapports ──────────────────────────────────────────────────
   async getReports(user: JwtPayload) {
     const organizationId = this.orgId(user);
-    const [players, allLoads, risks] = await Promise.all([
+    const [players, allLoads, risks, wellnessEntries] = await Promise.all([
       this.prisma.clubPlayer.findMany({
         where: { organizationId },
         select: { id: true, fullName: true, position: true, photoUrl: true },
@@ -822,11 +822,12 @@ export class PreparateurService {
         where: { organizationId },
         select: { playerId: true, risk: true },
       }),
+      this.prisma.wellnessEntry.findMany({ where: { organizationId } }),
     ]);
 
     const MONTHS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'];
 
-    // Group loads by player
+    // Group loads by player (already ordered desc → first = latest)
     const loadsByPlayer = new Map<string, typeof allLoads>();
     for (const l of allLoads) {
       if (!loadsByPlayer.has(l.playerId)) loadsByPlayer.set(l.playerId, []);
@@ -840,21 +841,55 @@ export class PreparateurService {
       if (r.risk > prev) riskMap.set(r.playerId, r.risk);
     }
 
+    // Wellness entry per player
+    const wellnessMap = new Map(wellnessEntries.map(e => [e.playerId, e]));
+
+    // Wellness score formula: (sommeil + (10-fatigue) + (10-stress) + (10-douleur) + humeur) / 50 * 100
+    const wellnessScore = (e: typeof wellnessEntries[0] | undefined) => {
+      if (!e) return 0;
+      return Math.round(((e.sommeil + (10 - e.fatigue) + (10 - e.stress) + (10 - e.douleur) + e.humeur) / 50) * 100);
+    };
+
     const reports = players.map(p => {
       const loads   = loadsByPlayer.get(p.id) ?? [];
       const latest  = loads[0];
-      const charge  = latest?.loadScore    ?? 0;
-      const fatigue = latest?.fatigueScore ?? 0;
-      const speed   = Math.round(Math.min(100, charge * 0.85 + (100 - fatigue) * 0.15));
-      const endurance = Math.round(Math.min(100, (latest?.recoveryScore ?? 0)));
-      const riskScore = riskMap.get(p.id) ?? 0;
-      const type = riskScore >= 50 ? 'Risque blessure' : 'Hebdomadaire';
-      const date = latest ? latest.createdAt.toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+      const wellness = wellnessMap.get(p.id);
 
-      // Evolution: last 6 load records → one point per record
+      // Charge: from PlayerLoad; fallback 0
+      const charge = latest?.loadScore ?? 0;
+
+      // Fatigue: merge PlayerLoad + Wellness (wellness.fatigue is 1-10, scale to 0-100)
+      const loadFatigue    = latest?.fatigueScore ?? null;
+      const wellnessFatigue = wellness ? wellness.fatigue * 10 : null;
+      const fatigue = loadFatigue !== null && wellnessFatigue !== null
+        ? Math.round((loadFatigue + wellnessFatigue) / 2)
+        : (loadFatigue ?? wellnessFatigue ?? 0);
+
+      // Endurance: from PlayerLoad recoveryScore; fallback wellness humeur×10
+      const endurance = latest?.recoveryScore
+        ? Math.round(Math.min(100, latest.recoveryScore))
+        : (wellness ? wellness.humeur * 10 : 0);
+
+      // Wellness score (0-100)
+      const wScore = wellnessScore(wellness);
+
+      const riskScore = riskMap.get(p.id) ?? 0;
+      const hasData   = charge > 0 || fatigue > 0 || wScore > 0;
+      const type = riskScore >= 50 || (wellness && wellness.fatigue >= 7)
+        ? 'Risque blessure'
+        : hasData ? 'Hebdomadaire' : 'Aucune donnée';
+
+      const date = latest
+        ? latest.createdAt.toISOString().split('T')[0]
+        : wellness
+          ? wellness.filledAt.toISOString().split('T')[0]
+          : new Date().toISOString().split('T')[0];
+
+      // Evolution: last 6 PlayerLoad records
       const evolution = [...loads].reverse().slice(-6).map(l => ({
         month: MONTHS[l.createdAt.getMonth()],
-        speed: Math.round(Math.min(100, l.loadScore * 0.85 + (100 - l.fatigueScore) * 0.15)),
+        charge: Math.round(Math.min(100, l.loadScore)),
+        fatigue: Math.round(Math.min(100, l.fatigueScore)),
         endurance: Math.round(Math.min(100, l.recoveryScore)),
       }));
 
@@ -868,14 +903,14 @@ export class PreparateurService {
         type,
         charge,
         fatigue,
-        speed,
         endurance,
+        wellness: wScore,
         evolution,
       };
     });
 
-    // Team summary entry
-    const filledReports = reports.filter(r => r.charge > 0);
+    // Team summary entry — include if any player has data
+    const filledReports = reports.filter(r => r.charge > 0 || r.wellness > 0);
     if (filledReports.length > 0) {
       const avg = (arr: number[]) => Math.round(arr.reduce((s, v) => s + v, 0) / arr.length);
       reports.unshift({
@@ -886,10 +921,10 @@ export class PreparateurService {
         photoUrl: null,
         date: new Date().toISOString().split('T')[0],
         type: 'Synthèse mensuelle',
-        charge: avg(filledReports.map(r => r.charge)),
-        fatigue: avg(filledReports.map(r => r.fatigue)),
-        speed: avg(filledReports.map(r => r.speed)),
+        charge:   avg(filledReports.map(r => r.charge)),
+        fatigue:  avg(filledReports.map(r => r.fatigue)),
         endurance: avg(filledReports.map(r => r.endurance)),
+        wellness: avg(filledReports.map(r => r.wellness)),
         evolution: [],
       });
     }
