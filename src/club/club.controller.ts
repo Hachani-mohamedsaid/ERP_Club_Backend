@@ -238,6 +238,13 @@ export class ClubController {
     return this.club.createInfrastructure(user, body);
   }
 
+  // ─── Préparateur — Condition Physique ─────────────────────────
+
+  @Get('preparateur/condition')
+  getPhysicalCondition(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getPhysicalCondition(user);
+  }
+
   // ─── Préparateur — Dashboard ───────────────────────────────────
 
   @Get('preparateur/dashboard')

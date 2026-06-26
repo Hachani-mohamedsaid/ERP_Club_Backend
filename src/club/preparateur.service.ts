@@ -223,6 +223,46 @@ export class PreparateurService {
     };
   }
 
+  // ─── Condition Physique ────────────────────────────────────────
+  async getPhysicalCondition(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const players = await this.prisma.clubPlayer.findMany({
+      where: { organizationId },
+      orderBy: { fullName: 'asc' },
+    });
+
+    const MONTHS = ['Mars', 'Avr', 'Mai', 'Juin'];
+
+    return players.map((p) => {
+      const r = (p.radar as Record<string, number> | null) ?? {};
+      const pace       = r.pace       ?? 60;
+      const shooting   = r.shooting   ?? 60;
+      const passing    = r.passing    ?? 60;
+      const dribbling  = r.dribbling  ?? 60;
+      const defending  = r.defending  ?? 60;
+      const physical   = r.physical   ?? 60;
+
+      const speed      = pace;
+      const endurance  = Math.round(physical * 0.6 + passing * 0.4);
+      const force      = Math.round(physical * 0.7 + defending * 0.3);
+      const explosivity = shooting;
+      const agility    = dribbling;
+      const recovery   = Math.min(99, Math.max(30, Math.round(100 - pace * 0.25 - physical * 0.15)));
+
+      // Évolution progressive sur 4 mois (tendance montante vers valeurs actuelles)
+      const evolution = MONTHS.map((month, i) => {
+        const factor = (i + 1) / 4;
+        return {
+          month,
+          speed:     Math.round(speed     * (0.94 + factor * 0.06)),
+          endurance: Math.round(endurance * (0.94 + factor * 0.06)),
+        };
+      });
+
+      return { id: p.id, name: p.fullName, position: p.position, ovr: p.ovr, speed, endurance, force, explosivity, agility, recovery, evolution };
+    });
+  }
+
   // ─── Dashboard Préparateur ─────────────────────────────────────
   async getDashboard(user: JwtPayload) {
     const organizationId = this.orgId(user);
