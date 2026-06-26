@@ -415,6 +415,100 @@ export class PreparateurService {
     return { deleted: true };
   }
 
+  // ─── Training Sessions ──────────────────────────────────────────
+
+  async getSessions(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const rows = await this.prisma.trainingSession.findMany({
+      where: { organizationId },
+      orderBy: [{ date: 'asc' }, { time: 'asc' }],
+    });
+    return rows.map(r => ({
+      id: r.id, title: r.title, type: r.type, date: r.date, time: r.time,
+      duration: r.duration, objective: r.objective, exercises: r.exercises ?? '',
+      intensity: r.intensity,
+    }));
+  }
+
+  async createSession(user: JwtPayload, body: {
+    title: string; type: string; date: string; time: string;
+    duration: string; objective: string; exercises?: string; intensity: string;
+  }) {
+    const organizationId = this.orgId(user);
+    const row = await this.prisma.trainingSession.create({
+      data: { organizationId, ...body },
+    });
+    return { id: row.id, title: row.title, type: row.type, date: row.date, time: row.time,
+      duration: row.duration, objective: row.objective, exercises: row.exercises ?? '',
+      intensity: row.intensity };
+  }
+
+  async updateSession(user: JwtPayload, id: string, body: Partial<{
+    title: string; type: string; date: string; time: string;
+    duration: string; objective: string; exercises: string; intensity: string;
+  }>) {
+    const organizationId = this.orgId(user);
+    const existing = await this.prisma.trainingSession.findFirst({ where: { id, organizationId } });
+    if (!existing) throw new NotFoundException('Séance introuvable.');
+    const row = await this.prisma.trainingSession.update({ where: { id }, data: body });
+    return { id: row.id, title: row.title, type: row.type, date: row.date, time: row.time,
+      duration: row.duration, objective: row.objective, exercises: row.exercises ?? '',
+      intensity: row.intensity };
+  }
+
+  async deleteSession(user: JwtPayload, id: string) {
+    const organizationId = this.orgId(user);
+    const existing = await this.prisma.trainingSession.findFirst({ where: { id, organizationId } });
+    if (!existing) throw new NotFoundException('Séance introuvable.');
+    await this.prisma.trainingSession.delete({ where: { id } });
+    return { deleted: true };
+  }
+
+  // ─── Session Presence ───────────────────────────────────────────
+
+  async getPresence(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const players = await this.prisma.clubPlayer.findMany({
+      where: { organizationId },
+      select: { id: true, fullName: true, position: true, status: true },
+      orderBy: { fullName: 'asc' },
+    });
+    const presences = await this.prisma.sessionPresence.findMany({
+      where: { organizationId },
+    });
+    const presenceMap = new Map(presences.map(p => [p.playerId, p.status]));
+    const loads = await this.prisma.playerLoad.findMany({
+      where: { organizationId },
+      orderBy: { createdAt: 'desc' },
+    });
+    const loadMap = new Map<string, number>();
+    for (const l of loads) {
+      if (!loadMap.has(l.playerId)) loadMap.set(l.playerId, l.loadScore);
+    }
+    return players.map(p => {
+      const defaults = this.defaultScores(p.status);
+      return {
+        playerId: p.id,
+        name: p.fullName,
+        position: p.position,
+        charge: loadMap.get(p.id) ?? defaults.load,
+        status: presenceMap.get(p.id) ?? 'Présent',
+      };
+    });
+  }
+
+  async updatePresence(user: JwtPayload, playerId: string, status: string) {
+    const organizationId = this.orgId(user);
+    const player = await this.prisma.clubPlayer.findFirst({ where: { id: playerId, organizationId } });
+    if (!player) throw new NotFoundException('Joueur introuvable.');
+    await this.prisma.sessionPresence.upsert({
+      where: { organizationId_playerId: { organizationId, playerId } },
+      create: { organizationId, playerId, status },
+      update: { status },
+    });
+    return { playerId, status };
+  }
+
   // ─── Helpers ───────────────────────────────────────────────────
   private defaultScores(playerStatus: string) {
     switch (playerStatus) {

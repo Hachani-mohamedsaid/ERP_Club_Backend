@@ -323,4 +323,42 @@ export class ClubController {
   deleteInjuryRisk(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.preparateur.deleteInjuryRisk(user, id);
   }
+
+  // ─── Préparateur — Sessions ─────────────────────────────────────
+
+  @Get('preparateur/sessions')
+  getSessions(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getSessions(user);
+  }
+
+  @Post('preparateur/sessions')
+  createSession(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
+    return this.preparateur.createSession(user, body as never);
+  }
+
+  @Patch('preparateur/sessions/:id')
+  updateSession(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.preparateur.updateSession(user, id, body as never);
+  }
+
+  @Delete('preparateur/sessions/:id')
+  deleteSession(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.preparateur.deleteSession(user, id);
+  }
+
+  // ─── Préparateur — Présence ─────────────────────────────────────
+
+  @Get('preparateur/presence')
+  getPresence(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getPresence(user);
+  }
+
+  @Patch('preparateur/presence/:playerId')
+  updatePresence(
+    @CurrentUser() user: JwtPayload,
+    @Param('playerId') playerId: string,
+    @Body() body: { status: string },
+  ) {
+    return this.preparateur.updatePresence(user, playerId, body.status);
+  }
 }
