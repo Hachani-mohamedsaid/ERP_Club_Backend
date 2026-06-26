@@ -1244,12 +1244,24 @@ export class ClubService {
     if (!player) throw new NotFoundException('Joueur introuvable.');
 
     if (!player.stats) {
-      const seeded = this.seedPlayerStats(player);
+      const org = await this.prisma.organization.findUnique({ where: { id: organizationId } });
+      const seeded = this.seedPlayerStats(player, org?.league ?? undefined);
       await this.prisma.clubPlayer.update({
         where: { id: playerId },
         data: { stats: seeded as never },
       });
       return seeded;
+    }
+    // Patch existing stats: fix 'Liga 1' positionLabel with real league if org league differs
+    const statsObj = player.stats as Record<string, unknown>;
+    const hero = statsObj?.dashboardHero as Record<string, unknown> | undefined;
+    if (hero && hero.positionLabel === 'Liga 1') {
+      const org = await this.prisma.organization.findUnique({ where: { id: organizationId } });
+      if (org?.league && org.league !== 'Liga 1') {
+        const patched = { ...statsObj, dashboardHero: { ...hero, positionLabel: org.league } };
+        await this.prisma.clubPlayer.update({ where: { id: playerId }, data: { stats: patched as never } });
+        return patched;
+      }
     }
     return player.stats;
   }
@@ -1313,7 +1325,7 @@ export class ClubService {
     };
   }
 
-  private seedPlayerStats(player: { ovr: number; goals: number; fullName: string }) {
+  private seedPlayerStats(player: { ovr: number; goals: number; fullName: string }, leagueName?: string) {
     const ovr = player.ovr || 75;
     const base = Math.max(60, ovr - 10);
     const months = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin'];
@@ -1341,7 +1353,7 @@ export class ClubService {
         marketValue: `${(Math.random() * 2 + 0.5).toFixed(1)}M €`,
         coachRating: +(7 + Math.random() * 2).toFixed(1),
         positionRanking: Math.ceil(Math.random() * 5) + 1,
-        positionLabel: 'Liga 1',
+        positionLabel: leagueName ?? 'Ligue 1',
       },
       marketValueTrend: { change: `+${(Math.random() * 15 + 3).toFixed(0)}%` },
     };
@@ -1422,16 +1434,33 @@ export class ClubService {
   // ─── Awards ──────────────────────────────────────────────────────
   async getAwards(user: JwtPayload, playerId: string) {
     const organizationId = this.orgId(user);
+    const org = await this.prisma.organization.findUnique({ where: { id: organizationId } });
+    const realClubName = org?.clubName ?? null;
+
     const existing = await this.prisma.playerAward.findMany({
       where: { organizationId, playerId },
       orderBy: { createdAt: 'desc' },
     });
     if (existing.length === 0) {
-      await this.seedAwards(organizationId, playerId);
+      await this.seedAwards(organizationId, playerId, realClubName);
       return this.prisma.playerAward.findMany({
         where: { organizationId, playerId },
         orderBy: { createdAt: 'desc' },
       });
+    }
+    // Patch any existing records that still have the old 'FC Carthage' placeholder
+    if (realClubName && realClubName !== 'FC Carthage') {
+      const stale = existing.filter((a) => a.club === 'FC Carthage');
+      if (stale.length > 0) {
+        await this.prisma.playerAward.updateMany({
+          where: { organizationId, playerId, club: 'FC Carthage' },
+          data: { club: realClubName },
+        });
+        return this.prisma.playerAward.findMany({
+          where: { organizationId, playerId },
+          orderBy: { createdAt: 'desc' },
+        });
+      }
     }
     return existing;
   }
@@ -1460,19 +1489,21 @@ export class ClubService {
     return { message: 'Award supprimé' };
   }
 
-  private async seedAwards(organizationId: string, playerId: string) {
+  private async seedAwards(organizationId: string, playerId: string, clubName: string | null = null) {
+    const club = clubName ?? 'Mon Club';
+    const season = `${new Date().getFullYear() - 1}-${String(new Date().getFullYear()).slice(2)}`;
     const awards = [
-      { title: 'Joueur du Mois', season: 'Mai 2026', icon: '🥇', color: '#d99a1f', awardType: 'award' },
-      { title: 'Meilleur Buteur', season: 'Saison 2025-26', icon: '⚽', color: '#FF6B57', awardType: 'award' },
-      { title: 'Fair-Play Award', season: '2024-25', icon: '🤝', color: '#22C55E', awardType: 'award' },
+      { title: 'Joueur du Mois', season: `Mai ${new Date().getFullYear()}`, icon: '🥇', color: '#d99a1f', awardType: 'award' },
+      { title: 'Meilleur Buteur', season, icon: '⚽', color: '#FF6B57', awardType: 'award' },
+      { title: 'Fair-Play Award', season: String(new Date().getFullYear() - 1), icon: '🤝', color: '#22C55E', awardType: 'award' },
     ];
     const trophies = [
-      { title: 'Champion Liga 1', season: '2024-25', icon: '🏆', color: '#d99a1f', awardType: 'trophy', year: '2025', club: 'FC Carthage' },
-      { title: 'Coupe de Tunisie', season: '2023-24', icon: '🥈', color: '#9ca3af', awardType: 'trophy', year: '2024', club: 'FC Carthage' },
+      { title: 'Champion Ligue 1', season: String(new Date().getFullYear() - 1), icon: '🏆', color: '#d99a1f', awardType: 'trophy', year: String(new Date().getFullYear() - 1), club },
+      { title: 'Coupe Nationale', season: String(new Date().getFullYear() - 2), icon: '🥈', color: '#9ca3af', awardType: 'trophy', year: String(new Date().getFullYear() - 2), club },
     ];
     const career = [
-      { title: 'Première sélection', season: '2022', icon: '⭐', color: '#3B82F6', awardType: 'career', year: '2022', club: 'Club Sportif Sfaxien', event: 'Première sélection' },
-      { title: 'Championnat remporté', season: '2024', icon: '🏆', color: '#d99a1f', awardType: 'career', year: '2024', club: 'FC Carthage', event: 'Championnat remporté' },
+      { title: 'Première sélection', season: String(new Date().getFullYear() - 4), icon: '⭐', color: '#3B82F6', awardType: 'career', year: String(new Date().getFullYear() - 4), club, event: 'Première sélection' },
+      { title: 'Championnat remporté', season: String(new Date().getFullYear() - 2), icon: '🏆', color: '#d99a1f', awardType: 'career', year: String(new Date().getFullYear() - 2), club, event: 'Championnat remporté' },
     ];
     const all = [...awards, ...trophies, ...career];
     await this.prisma.playerAward.createMany({
