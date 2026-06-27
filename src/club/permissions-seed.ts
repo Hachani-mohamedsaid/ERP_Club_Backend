@@ -78,6 +78,18 @@ function defaultMatrixForModule(module: string): Record<ClubMemberRole, Perm> {
   return base;
 }
 
+export function getDefaultPermission(
+  module: string,
+  clubRole: ClubMemberRole,
+  action: 'read' | 'create' | 'update' | 'delete',
+): boolean {
+  const p = defaultMatrixForModule(module)[clubRole] ?? perm(false, false, false, false);
+  if (action === 'read') return p.canRead;
+  if (action === 'create') return p.canCreate;
+  if (action === 'update') return p.canUpdate;
+  return p.canDelete;
+}
+
 export function buildDefaultPermissions(organizationId: string) {
   return PERMISSION_MODULES.flatMap((module) =>
     Object.values(ClubMemberRole).map((clubRole) => {

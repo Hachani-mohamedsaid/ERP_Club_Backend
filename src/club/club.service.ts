@@ -21,6 +21,7 @@ import { ClubAuditService } from './club-audit.service';
 import {
   buildDefaultPermissions,
   clubRoleToLabel,
+  getDefaultPermission,
   labelToClubRole,
   PERMISSION_MODULES,
 } from './permissions-seed';
@@ -453,11 +454,13 @@ export class ClubService {
         organizationId_module_clubRole: { organizationId, module, clubRole },
       },
     });
-    if (!row) return false;
-    if (action === 'read') return row.canRead;
-    if (action === 'create') return row.canCreate;
-    if (action === 'update') return row.canUpdate;
-    return row.canDelete;
+    if (row) {
+      if (action === 'read') return row.canRead;
+      if (action === 'create') return row.canCreate;
+      if (action === 'update') return row.canUpdate;
+      return row.canDelete;
+    }
+    return getDefaultPermission(module, clubRole, action);
   }
 
   // ─── Notifications ─────────────────────────────────────────────
