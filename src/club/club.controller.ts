@@ -207,6 +207,11 @@ export class ClubController {
     return this.club.listCalendarEvents(user);
   }
 
+  @Get('training')
+  getTraining(@CurrentUser() user: JwtPayload) {
+    return this.club.getTrainingOverview(user);
+  }
+
   @Post('calendar')
   @UseGuards(PermissionsGuard)
   @RequirePermission('Calendrier', 'create')

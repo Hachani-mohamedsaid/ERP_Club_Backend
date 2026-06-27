@@ -1065,6 +1065,96 @@ export class ClubService {
   }
 
   // ─── Calendar ──────────────────────────────────────────────────
+  private weekStartMonday(d: Date) {
+    const copy = new Date(d);
+    const day = copy.getDay();
+    const diff = day === 0 ? -6 : 1 - day;
+    copy.setDate(copy.getDate() + diff);
+    copy.setHours(0, 0, 0, 0);
+    return copy;
+  }
+
+  private parseDurationMinutes(raw: unknown): number | null {
+    if (raw == null) return null;
+    const s = String(raw).trim().toLowerCase();
+    const hMin = s.match(/(\d+)\s*h(?:\s*(\d+))?/);
+    if (hMin) return parseInt(hMin[1], 10) * 60 + (hMin[2] ? parseInt(hMin[2], 10) : 0);
+    const min = s.match(/(\d+)\s*min/);
+    if (min) return parseInt(min[1], 10);
+    const num = s.match(/^(\d+)$/);
+    if (num) return parseInt(num[1], 10);
+    return null;
+  }
+
+  async getTrainingOverview(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const [events, players, presences] = await Promise.all([
+      this.prisma.clubCalendarEvent.findMany({
+        where: { organizationId, eventType: 'ENTRAINEMENT' },
+        orderBy: [{ eventDate: 'asc' }, { eventTime: 'asc' }],
+      }),
+      this.prisma.clubPlayer.findMany({
+        where: { organizationId },
+        select: { id: true, age: true },
+      }),
+      this.prisma.sessionPresence.findMany({ where: { organizationId } }),
+    ]);
+
+    const start = this.weekStartMonday(new Date());
+    const end = new Date(start);
+    end.setDate(end.getDate() + 7);
+
+    const presenceMap = new Map(presences.map((p) => [p.playerId, p.status]));
+    const presentStatuses = new Set(['Présent', 'Present', 'present']);
+    const presentCount = players.filter((p) =>
+      presentStatuses.has(presenceMap.get(p.id) ?? 'Présent'),
+    ).length;
+
+    const weekEvents = events.filter((e) => {
+      const d = new Date(e.eventDate);
+      d.setHours(12, 0, 0, 0);
+      return d >= start && d < end;
+    });
+
+    const durationMinutes = weekEvents
+      .map((e) => {
+        const extra = (e.extraData ?? {}) as Record<string, unknown>;
+        return this.parseDurationMinutes(extra.duration);
+      })
+      .filter((m): m is number => m != null && m > 0);
+
+    const avgDurationMinutes =
+      durationMinutes.length > 0
+        ? Math.round(durationMinutes.reduce((s, m) => s + m, 0) / durationMinutes.length)
+        : null;
+
+    return {
+      weekStart: start.toLocaleDateString('fr-FR'),
+      summary: {
+        attendancePct: players.length > 0 ? Math.round((presentCount / players.length) * 100) : null,
+        presentCount,
+        totalPlayers: players.length,
+        seniorCount: players.filter((p) => p.age >= 21).length,
+        sessionsThisWeek: weekEvents.length,
+        avgDurationMinutes,
+      },
+      sessions: weekEvents.map((e) => {
+        const extra = (e.extraData ?? {}) as Record<string, unknown>;
+        const duration = extra.duration != null ? String(extra.duration) : null;
+        return {
+          id: e.id,
+          title: e.title,
+          eventDate: e.eventDate.toISOString().split('T')[0],
+          eventTime: e.eventTime,
+          location: e.location,
+          duration,
+          durationMinutes: this.parseDurationMinutes(duration),
+          intensity: extra.intensity != null ? String(extra.intensity) : null,
+        };
+      }),
+    };
+  }
+
   async listCalendarEvents(user: JwtPayload) {
     const organizationId = this.orgId(user);
     return this.prisma.clubCalendarEvent.findMany({
@@ -1075,14 +1165,32 @@ export class ClubService {
 
   async createCalendarEvent(user: JwtPayload, data: Record<string, unknown>) {
     const organizationId = this.orgId(user);
+    const title = String(data.title ?? '').trim();
+    if (!title) {
+      throw new BadRequestException('Le titre est requis.');
+    }
+
+    const extraFromBody = data.extraData as Record<string, unknown> | undefined;
+    const extraData: Record<string, string> = extraFromBody
+      ? Object.fromEntries(
+          Object.entries(extraFromBody).map(([k, v]) => [k, String(v ?? '')]),
+        )
+      : {};
+    if (data.duration != null) extraData.duration = String(data.duration);
+    if (data.intensity != null) extraData.intensity = String(data.intensity);
+    if (data.sessionType != null) extraData.sessionType = String(data.sessionType);
+    if (data.objective != null) extraData.objective = String(data.objective);
+
     return this.prisma.clubCalendarEvent.create({
       data: {
         organizationId,
-        title: String(data.title ?? ''),
+        title,
         eventDate: new Date(String(data.eventDate ?? Date.now())),
         eventTime: data.eventTime ? String(data.eventTime) : null,
         eventType: (data.eventType as never) ?? 'ENTRAINEMENT',
         location: data.location ? String(data.location) : null,
+        notes: data.notes ? String(data.notes) : null,
+        ...(Object.keys(extraData).length > 0 ? { extraData } : {}),
       },
     });
   }
