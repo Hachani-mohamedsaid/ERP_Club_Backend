@@ -9,6 +9,16 @@ import { ClubMemberRole } from '@prisma/client';
 import { JwtPayload } from '../../auth/jwt-payload.interface';
 import { ClubService } from '../club.service';
 import { PERMISSION_KEY } from '../decorators/require-permission.decorator';
+import { labelToClubRole } from '../permissions-seed';
+
+function resolveClubRole(raw?: string): ClubMemberRole {
+  if (!raw) return 'CLUB_ADMIN';
+  if (raw === 'CLUB_ADMIN' || raw === 'Club Admin' || raw === 'Admin Club') return 'CLUB_ADMIN';
+  if (Object.values(ClubMemberRole).includes(raw as ClubMemberRole)) {
+    return raw as ClubMemberRole;
+  }
+  return labelToClubRole(raw);
+}
 
 @Injectable()
 export class PermissionsGuard implements CanActivate {
@@ -33,7 +43,7 @@ export class PermissionsGuard implements CanActivate {
       return true;
     }
 
-    const clubRole = (user.clubMemberRole as ClubMemberRole | undefined) ?? 'CLUB_ADMIN';
+    const clubRole = resolveClubRole(user.clubMemberRole);
     if (clubRole === 'CLUB_ADMIN') {
       return true;
     }
