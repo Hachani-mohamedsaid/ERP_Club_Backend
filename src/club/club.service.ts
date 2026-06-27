@@ -18,6 +18,7 @@ import { JwtPayload } from '../auth/jwt-payload.interface';
 import { PrismaService } from '../prisma/prisma.service';
 import { ClubAccessService } from './club-access.service';
 import { ClubAuditService } from './club-audit.service';
+import { ValidationRequestService } from './validation-request.service';
 import {
   buildDefaultPermissions,
   clubRoleToLabel,
@@ -34,6 +35,7 @@ export class ClubService {
     private readonly prisma: PrismaService,
     private readonly access: ClubAccessService,
     private readonly audit: ClubAuditService,
+    private readonly validationRequests: ValidationRequestService,
   ) {}
 
   private orgId(user: JwtPayload) {
@@ -1046,6 +1048,19 @@ export class ClubService {
       type: AuditActionType.CREATION,
       ipAddress: ip,
     });
+
+    if (!this.validationRequests.canSelfValidate(user)) {
+      await this.validationRequests.create(user, {
+        type: 'CONTRAT',
+        title: 'Renouvellement contrat',
+        detail: `${holderName} — jusqu'au ${endDate.toLocaleDateString('fr-FR')}`,
+        amount: `${Number(data.salaryMonthly ?? 0).toLocaleString('fr-FR')} DT/mois`,
+        priority: 'HAUTE',
+        sourceKind: 'contract',
+        sourceId: c.id,
+      });
+    }
+
     return c;
   }
 

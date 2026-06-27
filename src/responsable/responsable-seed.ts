@@ -11,48 +11,12 @@ const DEFAULT_BUDGET_CATEGORIES = [
 export async function seedResponsableDefaults(
   tx: Prisma.TransactionClient,
   organizationId: string,
-  ownerName: string,
+  _ownerName: string,
 ) {
   const existing = await tx.budgetCategory.count({ where: { organizationId } });
   if (existing === 0) {
     await tx.budgetCategory.createMany({
       data: DEFAULT_BUDGET_CATEGORIES.map((c) => ({ organizationId, ...c })),
-    });
-  }
-
-  const validationCount = await tx.validationRequest.count({ where: { organizationId } });
-  if (validationCount === 0) {
-    await tx.validationRequest.createMany({
-      data: [
-        {
-          organizationId,
-          type: 'RECRUTEMENT',
-          title: 'Recrutement joueur',
-          detail: 'Prospect jeune — validation scouting requise',
-          priority: 'HAUTE',
-          status: 'EN_ATTENTE',
-          requestedBy: 'Scout',
-        },
-        {
-          organizationId,
-          type: 'CONTRAT',
-          title: 'Renouvellement contrat',
-          detail: 'Renouvellement salarial — 2 ans',
-          priority: 'HAUTE',
-          status: 'EN_ATTENTE',
-          requestedBy: 'Coach',
-        },
-        {
-          organizationId,
-          type: 'BUDGET',
-          title: 'Achat équipement',
-          detail: 'Matériel médical — 18 500 DT',
-          amount: '18 500 DT',
-          priority: 'NORMALE',
-          status: 'EN_ATTENTE',
-          requestedBy: ownerName,
-        },
-      ],
     });
   }
 }

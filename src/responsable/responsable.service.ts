@@ -17,6 +17,7 @@ import { JwtPayload } from '../auth/jwt-payload.interface';
 import { PrismaService } from '../prisma/prisma.service';
 import { ClubAccessService } from '../club/club-access.service';
 import { ClubAuditService } from '../club/club-audit.service';
+import { ValidationRequestService } from '../club/validation-request.service';
 
 const TYPE_LABEL: Record<ValidationRequestType, string> = {
   RECRUTEMENT: 'Recrutement',
@@ -60,6 +61,7 @@ export class ResponsableService {
     private readonly prisma: PrismaService,
     private readonly access: ClubAccessService,
     private readonly audit: ClubAuditService,
+    private readonly validationRequests: ValidationRequestService,
   ) {}
 
   private orgId(user: JwtPayload) {
@@ -69,6 +71,8 @@ export class ResponsableService {
   // ─── Validation ────────────────────────────────────────────────
   async listValidation(user: JwtPayload) {
     const organizationId = this.orgId(user);
+    await this.validationRequests.syncPendingSources(organizationId);
+
     const items = await this.prisma.validationRequest.findMany({
       where: { organizationId },
       orderBy: { createdAt: 'desc' },
@@ -112,6 +116,13 @@ export class ResponsableService {
       where: { id },
       data: { status, comment: comment ?? row.comment, decidedAt: new Date() },
     });
+
+    await this.validationRequests.applyDecision(
+      organizationId,
+      row.sourceKind,
+      row.sourceId,
+      status,
+    );
 
     await this.audit.log(organizationId, {
       userName: user.fullName,
@@ -311,6 +322,17 @@ export class ResponsableService {
       ipAddress: ip,
     });
 
+    if (!this.validationRequests.canSelfValidate(user)) {
+      await this.validationRequests.create(user, {
+        type: 'RECRUTEMENT',
+        title: 'Recrutement joueur',
+        detail: `${fullName} — ${p.position} · ${p.externalClub}`,
+        priority: p.potential >= 85 ? 'HAUTE' : 'NORMALE',
+        sourceKind: 'prospect',
+        sourceId: p.id,
+      });
+    }
+
     return this.formatProspect(p);
   }
 
@@ -437,6 +459,18 @@ export class ResponsableService {
       type: AuditActionType.CREATION,
       ipAddress: ip,
     });
+
+    if (!this.validationRequests.canSelfValidate(user)) {
+      await this.validationRequests.create(user, {
+        type: 'BUDGET',
+        title: 'Demande budget',
+        detail: label,
+        amount: `${amount.toLocaleString('fr-FR')} DT`,
+        priority: amount >= 10_000 ? 'HAUTE' : 'NORMALE',
+        sourceKind: 'expense',
+        sourceId: expense.id,
+      });
+    }
 
     return this.formatExpense(expense);
   }
