@@ -112,6 +112,11 @@ export class ClubController {
     return this.club.listPlayers(user);
   }
 
+  @Get('players/:id')
+  getPlayer(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.getPlayer(user, id);
+  }
+
   @Post('players')
   @UseGuards(PermissionsGuard)
   @RequirePermission('Joueurs', 'create')

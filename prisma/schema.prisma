@@ -74,6 +74,54 @@ enum CalendarEventType {
   REUNION
 }
 
+enum ValidationRequestType {
+  RECRUTEMENT
+  CONTRAT
+  BUDGET
+  CONVOCATION
+  MEDICAL
+}
+
+enum ValidationRequestStatus {
+  EN_ATTENTE
+  VALIDE
+  REFUSE
+  RETOUR
+}
+
+enum ValidationPriority {
+  CRITIQUE
+  HAUTE
+  NORMALE
+}
+
+enum DocumentCategory {
+  CONTRAT_PDF
+  RAPPORT_PDF
+  MEDICAL
+  LICENCE
+}
+
+enum DocumentStatus {
+  VALIDE
+  EXPIRE
+  EN_REVISION
+}
+
+enum RecruitmentStatus {
+  NON_TRAITE
+  EN_OBSERVATION
+  SHORTLISTE
+  CONTACTE
+  REFUSE
+}
+
+enum ExpenseRequestStatus {
+  EN_ATTENTE
+  APPROUVEE
+  REFUSEE
+}
+
 enum OrganizationStatus {
   TRIAL
   ACTIVE
@@ -155,6 +203,11 @@ model Organization {
   platformPayments PlatformPayment[]
   supportTickets  PlatformSupportTicket[]
   analysteModules AnalysteModuleData[]
+  validationRequests ValidationRequest[]
+  documents       ClubDocument[]
+  prospects       RecruitmentProspect[]
+  budgetCategories BudgetCategory[]
+  expenseRequests ExpenseRequest[]
   createdAt       DateTime             @default(now())
   updatedAt       DateTime             @updatedAt
 }
@@ -281,6 +334,8 @@ model ClubPlayer {
   status         PlayerStatus @default(DISPONIBLE)
   radar          Json?
   linkedMember   ClubMember?
+  profile        ClubPlayerProfile?
+  awards         ClubPlayerAward[]
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 }
@@ -291,6 +346,8 @@ model ClubStaff {
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   fullName       String
   role           String
+  phone          String?
+  department     String?
   salaryMonthly  Int          @default(0)
   contractEnd    DateTime?
   isAvailable    Boolean      @default(true)
@@ -464,4 +521,118 @@ model PlatformBlockedIp {
   reason    String
   country   String?
   createdAt DateTime @default(now())
+}
+
+model ValidationRequest {
+  id             String                  @id @default(uuid())
+  organizationId String
+  organization   Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  type           ValidationRequestType
+  title          String
+  detail         String
+  amount         String?
+  priority       ValidationPriority      @default(NORMALE)
+  status         ValidationRequestStatus @default(EN_ATTENTE)
+  requestedBy    String
+  comment        String?
+  sourceKind     String?
+  sourceId       String?
+  decidedAt      DateTime?
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+}
+
+model ClubDocument {
+  id             String           @id @default(uuid())
+  organizationId String
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  category       DocumentCategory
+  playerName     String?
+  fileUrl        String?
+  sizeLabel      String           @default("—")
+  status         DocumentStatus   @default(VALIDE)
+  expiresAt      DateTime?
+  uploadedBy     String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+}
+
+model RecruitmentProspect {
+  id             String            @id @default(uuid())
+  organizationId String
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  fullName       String
+  age            Int               @default(0)
+  position       String
+  externalClub   String            @default("—")
+  nationality    String            @default("TN")
+  potential      Int               @default(0)
+  score          Int               @default(0)
+  status         RecruitmentStatus @default(NON_TRAITE)
+  notes          String?
+  scoutName      String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+}
+
+model BudgetCategory {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  allocated      Int          @default(0)
+  spent          Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  expenses       ExpenseRequest[]
+
+  @@unique([organizationId, name])
+}
+
+model ExpenseRequest {
+  id             String               @id @default(uuid())
+  organizationId String
+  organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  categoryId     String?
+  category       BudgetCategory?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  label          String
+  amount         Int
+  requestedBy    String
+  status         ExpenseRequestStatus @default(EN_ATTENTE)
+  note           String?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+}
+
+model ClubPlayerProfile {
+  id             String     @id @default(uuid())
+  clubPlayerId   String     @unique
+  clubPlayer     ClubPlayer @relation(fields: [clubPlayerId], references: [id], onDelete: Cascade)
+  career         Json?
+  evolution      Json?
+  heatmapZones   Json?
+  training       Json?
+  matchAnalysis  Json?
+  aiInsight      Json?
+  fifaAttributes Json?
+  chemistry      Json?
+  messages       Json?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@map("club_player_profiles")
+}
+
+model ClubPlayerAward {
+  id           String     @id @default(uuid())
+  clubPlayerId String
+  clubPlayer   ClubPlayer @relation(fields: [clubPlayerId], references: [id], onDelete: Cascade)
+  title        String
+  season       String?
+  awardType    String     @default("TROPHY")
+  icon         String?
+  createdAt    DateTime   @default(now())
+
+  @@map("club_player_awards")
 }

@@ -640,6 +640,23 @@ export class ClubService {
   }
 
   // ─── Players ───────────────────────────────────────────────────
+  async getPlayer(user: JwtPayload, id: string) {
+    const organizationId = this.orgId(user);
+    const player = await this.prisma.clubPlayer.findFirst({
+      where: { id, organizationId },
+    });
+    if (!player) throw new NotFoundException('Joueur introuvable.');
+    const member = await this.prisma.clubMember.findFirst({
+      where: { organizationId, clubPlayerId: id },
+      select: { email: true },
+    });
+    return {
+      ...this.formatPlayer(player),
+      hasAccount: Boolean(member),
+      accountEmail: member?.email ?? null,
+    };
+  }
+
   async listPlayers(user: JwtPayload) {
     const organizationId = this.orgId(user);
     const [players, joueurMembers] = await Promise.all([
@@ -738,6 +755,7 @@ export class ClubService {
     marketValue: string;
     salaryMonthly: number;
     status: string;
+    radar?: unknown;
   }) {
     const statusMap: Record<string, string> = {
       DISPONIBLE: 'Disponible',
@@ -745,6 +763,11 @@ export class ClubService {
       LIMITE: 'Limité',
       FIN_CONTRAT: 'Fin contrat',
     };
+    const defaultRadar = { pace: 70, shooting: 70, passing: 70, dribbling: 70, defending: 70, physical: 70 };
+    const radar =
+      p.radar && typeof p.radar === 'object' && !Array.isArray(p.radar)
+        ? (p.radar as Record<string, number>)
+        : defaultRadar;
     return {
       id: p.id,
       name: p.fullName,
@@ -755,7 +778,7 @@ export class ClubService {
       marketValue: p.marketValue,
       contract: { salary: `${p.salaryMonthly.toLocaleString('fr-FR')} DT/mois` },
       availability: statusMap[p.status] ?? p.status,
-      radar: { pace: 70, shooting: 70, passing: 70, dribbling: 70, defending: 70, physical: 70 },
+      radar,
       performanceHistory: [],
       matches: [],
       positionFull: p.position,
@@ -782,6 +805,8 @@ export class ClubService {
         organizationId,
         fullName,
         role: this.normalizeStaffRole(String(data.role ?? 'Coach')),
+        phone: data.phone ? String(data.phone) : null,
+        department: data.department ? String(data.department) : null,
         salaryMonthly: Number(data.salaryMonthly ?? 0),
         contractEnd: data.contractEnd ? new Date(String(data.contractEnd)) : null,
         isAvailable: data.isAvailable !== false,
@@ -810,6 +835,8 @@ export class ClubService {
       data: {
         ...(data.fullName != null ? { fullName: String(data.fullName).trim() } : {}),
         ...(data.role != null ? { role: this.normalizeStaffRole(String(data.role)) } : {}),
+        ...(data.phone != null ? { phone: String(data.phone) } : {}),
+        ...(data.department != null ? { department: String(data.department) } : {}),
         ...(data.salaryMonthly != null ? { salaryMonthly: Number(data.salaryMonthly) } : {}),
         ...(data.contractEnd !== undefined
           ? { contractEnd: data.contractEnd ? new Date(String(data.contractEnd)) : null }
