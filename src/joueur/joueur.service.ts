@@ -41,7 +41,7 @@ export class JoueurService {
     const playerId = await this.resolvePlayerId(user);
     const player = await this.prisma.clubPlayer.findUnique({
       where: { id: playerId },
-      include: { profile: true, awards: true },
+      include: { clubPlayerProfile: true, PlayerAward: true },
     });
     if (!player) throw new NotFoundException('Joueur introuvable.');
 
@@ -67,7 +67,7 @@ export class JoueurService {
           }
         : { salary: `${player.salaryMonthly.toLocaleString('fr-FR')} DT/mois`, expiration: '—' },
       radar: (player.radar as Record<string, number>) ?? DEFAULT_RADAR,
-      awardsCount: player.awards.length,
+      awardsCount: player.PlayerAward.length,
     };
   }
 
@@ -75,11 +75,11 @@ export class JoueurService {
     const playerId = await this.resolvePlayerId(user);
     const player = await this.prisma.clubPlayer.findUnique({
       where: { id: playerId },
-      include: { profile: true, awards: true },
+      include: { clubPlayerProfile: true, PlayerAward: true },
     });
     if (!player) throw new NotFoundException('Joueur introuvable.');
 
-    const profile = player.profile ?? (await this.ensureProfile(player));
+    const profile = player.clubPlayerProfile ?? (await this.ensureProfile(player));
 
     return {
       player: {
@@ -100,7 +100,7 @@ export class JoueurService {
       aiInsight: profile.aiInsight ?? { summary: '', factors: [] },
       fifaAttributes: profile.fifaAttributes ?? {},
       chemistry: profile.chemistry ?? [],
-      awards: player.awards.map((a) => ({
+      awards: player.PlayerAward.map((a) => ({
         id: a.id,
         title: a.title,
         season: a.season,
