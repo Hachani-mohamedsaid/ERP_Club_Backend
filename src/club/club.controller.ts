@@ -17,6 +17,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { JwtPayload } from '../auth/jwt-payload.interface';
 import { ClubService } from './club.service';
 import { PreparateurService } from './preparateur.service';
+import { CoachService } from './coach.service';
 import { PermissionsGuard } from './guards/permissions.guard';
 import { RequirePermission } from './decorators/require-permission.decorator';
 import { ClubAiChatDto } from './dto/club-ai-chat.dto';
@@ -27,6 +28,7 @@ export class ClubController {
   constructor(
     private readonly club: ClubService,
     private readonly preparateur: PreparateurService,
+    private readonly coach: CoachService,
   ) {}
 
   private ip(req: Request) {
@@ -793,6 +795,16 @@ export class ClubController {
   @RequirePermission('Finances', 'delete')
   deleteInvoice(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.club.deleteInvoice(user, id);
+  }
+
+  @Get('coach/ai')
+  getCoachAi(@CurrentUser() user: JwtPayload) {
+    return this.coach.getCoachAi(user);
+  }
+
+  @Post('coach/ai/chat')
+  chatCoachAi(@CurrentUser() user: JwtPayload, @Body() dto: ClubAiChatDto) {
+    return this.coach.chatCoachAi(user, dto);
   }
 
   @Get('ai')

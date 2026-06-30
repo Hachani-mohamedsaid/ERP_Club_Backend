@@ -5,11 +5,12 @@ import { ValidationRequestService } from './validation-request.service';
 import { ClubController } from './club.controller';
 import { ClubService } from './club.service';
 import { PreparateurService } from './preparateur.service';
+import { CoachService } from './coach.service';
 import { PermissionsGuard } from './guards/permissions.guard';
 
 @Module({
   controllers: [ClubController],
-  providers: [ClubService, ClubAccessService, ClubAuditService, PermissionsGuard, PreparateurService, ValidationRequestService],
-  exports: [ClubService, ClubAuditService, ClubAccessService, PreparateurService, ValidationRequestService],
+  providers: [ClubService, ClubAccessService, ClubAuditService, PermissionsGuard, PreparateurService, CoachService, ValidationRequestService],
+  exports: [ClubService, ClubAuditService, ClubAccessService, PreparateurService, CoachService, ValidationRequestService],
 })
 export class ClubModule {}
