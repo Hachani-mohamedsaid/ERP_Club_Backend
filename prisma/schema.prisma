@@ -74,6 +74,8 @@ model Organization {
   validationRequests ValidationRequest[]
   documents          ClubDocument[]
   prospects          RecruitmentProspect[]
+  scoutReports       ScoutReport[]
+  scoutWatchlist     ScoutWatchlist[]
   budgetCategories   BudgetCategory[]
   expenseRequests    ExpenseRequest[]
   authUsers        User[]                    @relation("OrganizationMembers")
@@ -565,6 +567,7 @@ enum CalendarEventType {
   MEDICAL
   REUNION
   RECUPERATION
+  SCOUT
 }
 
 enum OrganizationStatus {
@@ -882,8 +885,51 @@ model RecruitmentProspect {
   status         RecruitmentStatus @default(NON_TRAITE)
   notes          String?
   scoutName      String?
+  scoutExtra     Json?
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
+}
+
+model ScoutReport {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  prospectId     String?
+  prospectName   String
+  scoutName      String
+  matchDate      String?
+  matchObserved  String?
+  opponent       String?
+  technique      Int          @default(0)
+  physique       Int          @default(0)
+  mental         Int          @default(0)
+  tactique       Int          @default(0)
+  vitesse        Int          @default(0)
+  strengths      String?
+  weaknesses     String?
+  recommendation String?
+  decision       String       @default("observe")
+  aiScore        Int?
+  status         String       @default("submitted")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+}
+
+model ScoutWatchlist {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  prospectId     String
+  priority       String       @default("B")
+  notes          Json?
+  scoutName      String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([organizationId, prospectId])
+  @@index([organizationId])
 }
 
 model BudgetCategory {

@@ -11,6 +11,7 @@ import { PlatformModule } from './platform/platform.module';
 import { AnalysteModule } from './analyste/analyste.module';
 import { ResponsableModule } from './responsable/responsable.module';
 import { JoueurModule } from './joueur/joueur.module';
+import { ScoutModule } from './scout/scout.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { JoueurModule } from './joueur/joueur.module';
     AnalysteModule,
     ResponsableModule,
     JoueurModule,
+    ScoutModule,
   ],
   controllers: [AppController],
   providers: [AppService],
