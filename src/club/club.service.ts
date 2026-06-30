@@ -2230,55 +2230,247 @@ export class ClubService {
     return content;
   }
 
+  private parseMarketValue(value: string): number {
+    const cleaned = value.replace(/\s/g, '').toUpperCase();
+    const num = parseFloat(cleaned.replace(/[^\d.]/g, ''));
+    if (!Number.isFinite(num)) return 0;
+    if (cleaned.includes('M')) return num * 1_000_000;
+    if (cleaned.includes('K')) return num * 1_000;
+    return num;
+  }
+
+  private compactForAi(value: unknown, maxLen = 500): unknown {
+    if (value == null) return null;
+    try {
+      const str = JSON.stringify(value);
+      if (str.length <= maxLen) return value;
+      return JSON.parse(str.slice(0, maxLen));
+    } catch {
+      return String(value).slice(0, maxLen);
+    }
+  }
+
   private async buildClubContext(organizationId: string) {
     await this.syncDashboardStats(organizationId);
 
-    const [org, players, staff, injuries, contracts, events, finance] = await Promise.all([
-      this.prisma.organization.findUnique({
-        where: { id: organizationId },
-        include: { dashboardStats: true },
-      }),
-      this.prisma.clubPlayer.findMany({
-        where: { organizationId },
-        select: { fullName: true, position: true, status: true },
-        take: 20,
-      }),
-      this.prisma.clubStaff.findMany({
-        where: { organizationId },
-        select: { fullName: true, role: true },
-        take: 15,
-      }),
+    const org = await this.prisma.organization.findUnique({
+      where: { id: organizationId },
+      include: { dashboardStats: true, profile: true },
+    });
+
+    const [
+      players,
+      staff,
+      injuries,
+      contracts,
+      events,
+      finance,
+      financeAll,
+      sponsors,
+      invoices,
+      infrastructures,
+      transfers,
+      chemistry,
+      prospects,
+      members,
+      matchStats,
+      awards,
+      profiles,
+      trainingSessions,
+      playerLoads,
+      injuryRisks,
+      sessionPresences,
+      matchReadiness,
+      documents,
+    ] = await Promise.all([
+      this.prisma.clubPlayer.findMany({ where: { organizationId }, orderBy: { ovr: 'desc' } }),
+      this.prisma.clubStaff.findMany({ where: { organizationId } }),
       this.prisma.clubInjury.findMany({
         where: { organizationId },
-        select: { playerName: true, injuryType: true, bodyPart: true, riskScore: true },
-        take: 10,
         orderBy: { createdAt: 'desc' },
+        take: 20,
       }),
-      this.prisma.clubContract.findMany({
+      this.prisma.clubContract.findMany({ where: { organizationId }, orderBy: { endDate: 'asc' } }),
+      this.prisma.clubCalendarEvent.findMany({
         where: { organizationId },
-        select: { holderName: true, endDate: true, salaryMonthly: true },
+        orderBy: { eventDate: 'asc' },
         take: 15,
       }),
-      this.prisma.clubCalendarEvent.findMany({
-        where: { organizationId, eventDate: { gte: new Date() } },
-        select: { title: true, eventType: true, eventDate: true },
-        orderBy: { eventDate: 'asc' },
-        take: 5,
+      this.prisma.clubFinanceEntry.findMany({
+        where: { organizationId },
+        orderBy: { entryDate: 'desc' },
+        take: 50,
       }),
-      this.prisma.clubFinanceEntry.findMany({ where: { organizationId } }),
+      this.prisma.clubFinanceEntry.findMany({
+        where: { organizationId },
+        select: { amount: true, type: true, category: true },
+      }),
+      this.prisma.clubSponsor.findMany({ where: { organizationId } }),
+      this.prisma.clubInvoice.findMany({ where: { organizationId }, take: 20 }),
+      this.prisma.clubInfrastructure.findMany({ where: { organizationId } }),
+      this.prisma.playerTransfer.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+        take: 15,
+      }),
+      this.prisma.playerChemistry.findMany({ where: { organizationId }, take: 30 }),
+      this.prisma.recruitmentProspect.findMany({
+        where: { organizationId },
+        orderBy: { score: 'desc' },
+        take: 20,
+      }),
+      this.prisma.clubMember.findMany({
+        where: { organizationId },
+        select: { fullName: true, email: true, clubRole: true, status: true },
+      }),
+      this.prisma.playerMatchStat.findMany({
+        where: { organizationId },
+        orderBy: { matchDate: 'desc' },
+        take: 100,
+      }),
+      this.prisma.playerAward.findMany({ where: { organizationId } }),
+      this.prisma.clubPlayerProfile.findMany({
+        where: { clubPlayer: { organizationId } },
+      }),
+      this.prisma.trainingSession.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+      }),
+      this.prisma.playerLoad.findMany({
+        where: { organizationId },
+        orderBy: { sessionDate: 'desc' },
+        take: 30,
+      }),
+      this.prisma.injuryRisk.findMany({ where: { organizationId }, take: 20 }),
+      this.prisma.sessionPresence.findMany({ where: { organizationId } }),
+      this.prisma.matchReadiness.findMany({ where: { organizationId } }),
+      this.prisma.playerDocument.findMany({
+        where: { organizationId },
+        select: { playerId: true, name: true, docType: true },
+        take: 30,
+      }),
     ]);
 
     const stats = org?.dashboardStats;
-    const revenue = finance.filter((f) => f.type === 'REVENUE').reduce((s, f) => s + f.amount, 0);
-    const expenses = finance.filter((f) => f.type === 'EXPENSE').reduce((s, f) => s + f.amount, 0);
+    const revenue = financeAll.filter((f) => f.type === 'REVENUE').reduce((s, f) => s + f.amount, 0);
+    const expenses = financeAll.filter((f) => f.type === 'EXPENSE').reduce((s, f) => s + f.amount, 0);
     const contractsExpiring = contracts.filter(
       (c) => c.endDate.getTime() - Date.now() < 90 * 24 * 60 * 60 * 1000,
+    );
+
+    const statusMap: Record<string, string> = {
+      DISPONIBLE: 'Disponible',
+      BLESSE: 'Blessé',
+      LIMITE: 'Limité',
+      FIN_CONTRAT: 'Fin contrat',
+    };
+
+    const playersDetailed = players.map((p) => {
+      const profile = profiles.find((pr) => pr.clubPlayerId === p.id);
+      const pStats = matchStats.filter((m) => m.playerId === p.id);
+      const pAwards = awards.filter((a) => a.playerId === p.id);
+      const pLoads = playerLoads.filter((l) => l.playerId === p.id).slice(0, 3);
+      const pRisks = injuryRisks.filter((r) => r.playerId === p.id);
+      const pPresence = sessionPresences.find((sp) => sp.playerId === p.id);
+      const pReadiness = matchReadiness.find((mr) => mr.playerId === p.id);
+      const avgRating =
+        pStats.length > 0
+          ? Math.round((pStats.reduce((s, m) => s + m.rating, 0) / pStats.length) * 10) / 10
+          : null;
+
+      return {
+        id: p.id,
+        name: p.fullName,
+        position: p.position,
+        age: p.age,
+        ovr: p.ovr,
+        goals: p.goals,
+        marketValue: p.marketValue,
+        marketValueNum: this.parseMarketValue(p.marketValue),
+        salaryMonthly: p.salaryMonthly,
+        status: statusMap[p.status] ?? p.status,
+        nationality: p.nationality,
+        jerseyNumber: p.jerseyNumber,
+        height: p.height,
+        weight: p.weight,
+        strongFoot: p.strongFoot,
+        radar: p.radar,
+        stats: this.compactForAi(p.stats, 600),
+        fifaAttributes: this.compactForAi(profile?.fifaAttributes, 400),
+        aiInsight: this.compactForAi(profile?.aiInsight, 300),
+        matchSummary: {
+          matchesPlayed: pStats.length,
+          totalGoals: pStats.reduce((s, m) => s + m.goals, 0),
+          totalAssists: pStats.reduce((s, m) => s + m.assists, 0),
+          avgRating,
+        },
+        recentMatches: pStats.slice(0, 5).map((m) => ({
+          date: m.matchDate.toISOString().slice(0, 10),
+          opponent: m.opponent,
+          result: m.result,
+          goals: m.goals,
+          assists: m.assists,
+          rating: m.rating,
+          minutes: m.minutes,
+        })),
+        awards: pAwards.map((a) => ({ title: a.title, season: a.season })),
+        loads: pLoads.map((l) => ({
+          date: l.sessionDate.toISOString().slice(0, 10),
+          load: l.loadScore,
+          fatigue: l.fatigueScore,
+          recovery: l.recoveryScore,
+        })),
+        injuryRisks: pRisks.map((r) => ({ zone: r.zone, risk: r.risk })),
+        presence: pPresence?.status ?? null,
+        matchReadiness: pReadiness?.status ?? null,
+      };
+    });
+
+    const topByOvr = [...playersDetailed].sort((a, b) => b.ovr - a.ovr).slice(0, 5);
+    const topByValue = [...playersDetailed]
+      .sort((a, b) => b.marketValueNum - a.marketValueNum)
+      .slice(0, 5)
+      .map(({ name, ovr, marketValue, position }) => ({ name, ovr, marketValue, position }));
+    const topScorers = [...playersDetailed]
+      .sort((a, b) => b.goals - a.goals)
+      .slice(0, 5)
+      .map(({ name, goals, ovr, position }) => ({ name, goals, ovr, position }));
+    const topRated = [...playersDetailed]
+      .filter((p) => p.matchSummary.avgRating != null)
+      .sort((a, b) => (b.matchSummary.avgRating ?? 0) - (a.matchSummary.avgRating ?? 0))
+      .slice(0, 5)
+      .map(({ name, matchSummary, ovr, position }) => ({
+        name,
+        avgRating: matchSummary.avgRating,
+        ovr,
+        position,
+      }));
+
+    const financeByCategory = financeAll.reduce<Record<string, { revenue: number; expense: number }>>(
+      (acc, entry) => {
+        const cat = entry.category || 'Autre';
+        if (!acc[cat]) acc[cat] = { revenue: 0, expense: 0 };
+        if (entry.type === 'REVENUE') acc[cat].revenue += entry.amount;
+        else acc[cat].expense += entry.amount;
+        return acc;
+      },
+      {},
     );
 
     return {
       clubName: org?.clubName ?? 'Club',
       league: org?.league ?? '—',
+      country: org?.country ?? '—',
       season: String(new Date().getFullYear()),
+      profile: org?.profile
+        ? {
+            city: org.profile.city,
+            stadium: org.profile.stadium,
+            officialEmail: org.profile.officialEmail,
+            website: org.profile.website,
+          }
+        : null,
       playersCount: stats?.playersCount ?? players.length,
       staffCount: stats?.staffCount ?? staff.length,
       injuredCount: stats?.injuredCount ?? injuries.length,
@@ -2287,33 +2479,182 @@ export class ClubService {
       budgetRemaining: stats?.budgetRemaining ?? Math.max(0, revenue - expenses),
       revenue,
       expenses,
-      players: players.map((p) => `${p.fullName} (${p.position}, ${p.status})`),
-      staff: staff.map((s) => `${s.fullName} — ${s.role}`),
-      injuries: injuries.map((i) => `${i.playerName}: ${i.injuryType}${i.bodyPart ? ` (${i.bodyPart})` : ''} — risque ${i.riskScore}%`),
-      contractsExpiring: contractsExpiring.map(
+      rankings: {
+        topOvr: topByOvr.map(({ name, ovr, position, marketValue }) => ({
+          name,
+          ovr,
+          position,
+          marketValue,
+        })),
+        topMarketValue: topByValue,
+        topScorers,
+        topRated,
+      },
+      players: playersDetailed,
+      staff: staff.map((s) => ({
+        name: s.fullName,
+        role: s.role,
+        department: s.department,
+        salaryMonthly: s.salaryMonthly,
+        available: s.isAvailable,
+        contractEnd: s.contractEnd?.toISOString().slice(0, 10) ?? null,
+      })),
+      injuries: injuries.map((i) => ({
+        player: i.playerName,
+        type: i.injuryType,
+        bodyPart: i.bodyPart,
+        riskScore: i.riskScore,
+        returnDate: i.returnDate?.toISOString().slice(0, 10) ?? null,
+      })),
+      contracts: contracts.map((c) => ({
+        holder: c.holderName,
+        start: c.startDate.toISOString().slice(0, 10),
+        end: c.endDate.toISOString().slice(0, 10),
+        salaryMonthly: c.salaryMonthly,
+        bonus: c.bonus,
+        consumedPct: c.consumedPct,
+        expiringSoon: c.endDate.getTime() - Date.now() < 90 * 24 * 60 * 60 * 1000,
+      })),
+      contractsExpiring: contractsExpiring.map((c) => ({
+        holder: c.holderName,
+        end: c.endDate.toISOString().slice(0, 10),
+        salaryMonthly: c.salaryMonthly,
+      })),
+      calendar: events.map((e) => ({
+        title: e.title,
+        type: e.eventType,
+        date: e.eventDate.toISOString().slice(0, 10),
+        time: e.eventTime,
+        location: e.location,
+      })),
+      finance: {
+        totalRevenue: revenue,
+        totalExpenses: expenses,
+        budgetUsedPct: stats?.budgetUsedPct ?? (revenue > 0 ? Math.round((expenses / revenue) * 100) : 0),
+        byCategory: financeByCategory,
+        recentEntries: finance.slice(0, 20).map((f) => ({
+          label: f.label,
+          amount: f.amount,
+          type: f.type,
+          category: f.category,
+          date: f.entryDate.toISOString().slice(0, 10),
+        })),
+      },
+      sponsors: sponsors.map((s) => ({
+        name: s.nom,
+        amount: s.montant,
+        status: s.status,
+        sector: s.secteur,
+        endDate: s.endDate.toISOString().slice(0, 10),
+      })),
+      invoices: invoices.map((i) => ({
+        reference: i.reference,
+        supplier: i.fournisseur,
+        amount: i.montant,
+        status: i.status,
+        dueDate: i.dueDate?.toISOString().slice(0, 10) ?? null,
+      })),
+      infrastructures: infrastructures.map((inf) => ({
+        name: inf.name,
+        type: inf.infraType,
+        status: inf.status,
+        capacity: inf.capacity,
+        occupationPct: inf.occupationPct,
+      })),
+      transfers: transfers.map((t) => ({
+        player: t.playerName,
+        type: t.transferType,
+        club: t.club,
+        value: t.value,
+        status: t.status,
+        probability: t.probability,
+      })),
+      chemistry: chemistry.map((c) => ({
+        player1: c.player1Name,
+        player2: c.player2Name,
+        score: c.chemistry,
+      })),
+      prospects: prospects.map((p) => ({
+        name: p.fullName,
+        age: p.age,
+        position: p.position,
+        club: p.externalClub,
+        potential: p.potential,
+        score: p.score,
+        status: p.status,
+      })),
+      members: members.map((m) => ({
+        name: m.fullName,
+        role: m.clubRole,
+        status: m.status,
+      })),
+      trainingSessions: trainingSessions.map((t) => ({
+        title: t.title,
+        type: t.type,
+        date: t.date,
+        intensity: t.intensity,
+      })),
+      documentsCount: documents.length,
+      // Legacy string arrays for fallback helpers
+      playersLegacy: playersDetailed.map(
+        (p) =>
+          `${p.name} (${p.position}, OVR ${p.ovr}, valeur ${p.marketValue}, ${p.goals} buts, ${p.status})`,
+      ),
+      staffLegacy: staff.map((s) => `${s.fullName} — ${s.role}`),
+      injuriesLegacy: injuries.map(
+        (i) => `${i.playerName}: ${i.injuryType}${i.bodyPart ? ` (${i.bodyPart})` : ''} — risque ${i.riskScore}%`,
+      ),
+      contractsExpiringLegacy: contractsExpiring.map(
         (c) => `${c.holderName} — fin ${c.endDate.toLocaleDateString('fr-FR')}`,
       ),
-      upcomingEvents: events.map(
-        (e) => `${e.title} (${e.eventType}) — ${e.eventDate.toLocaleDateString('fr-FR')}`,
-      ),
+      upcomingEventsLegacy: events
+        .filter((e) => e.eventDate >= new Date())
+        .slice(0, 5)
+        .map((e) => `${e.title} (${e.eventType}) — ${e.eventDate.toLocaleDateString('fr-FR')}`),
     };
   }
 
   private formatClubContextText(ctx: Awaited<ReturnType<ClubService['buildClubContext']>>) {
+    const snapshot = {
+      club: {
+        name: ctx.clubName,
+        league: ctx.league,
+        country: ctx.country,
+        season: ctx.season,
+        profile: ctx.profile,
+      },
+      summary: {
+        playersCount: ctx.playersCount,
+        staffCount: ctx.staffCount,
+        injuredCount: ctx.injuredCount,
+        contractsToRenew: ctx.contractsToRenew,
+        budgetUsedPct: ctx.budgetUsedPct,
+        budgetRemaining: ctx.budgetRemaining,
+        revenue: ctx.revenue,
+        expenses: ctx.expenses,
+      },
+      rankings: ctx.rankings,
+      players: ctx.players,
+      staff: ctx.staff,
+      injuries: ctx.injuries,
+      contracts: ctx.contracts,
+      calendar: ctx.calendar,
+      finance: ctx.finance,
+      sponsors: ctx.sponsors,
+      invoices: ctx.invoices,
+      infrastructures: ctx.infrastructures,
+      transfers: ctx.transfers,
+      chemistry: ctx.chemistry,
+      prospects: ctx.prospects,
+      members: ctx.members,
+      trainingSessions: ctx.trainingSessions,
+    };
+
     return [
-      `Club: ${ctx.clubName} | Ligue: ${ctx.league} | Saison: ${ctx.season}`,
-      `Effectif: ${ctx.playersCount} joueurs | Staff: ${ctx.staffCount} | Blessés: ${ctx.injuredCount}`,
-      `Finances: revenus ${ctx.revenue.toLocaleString('fr-FR')} DT, dépenses ${ctx.expenses.toLocaleString('fr-FR')} DT, budget utilisé ${ctx.budgetUsedPct}%, reste ${ctx.budgetRemaining.toLocaleString('fr-FR')} DT`,
-      `Contrats à renouveler (<90j): ${ctx.contractsToRenew}`,
-      ctx.players.length ? `Joueurs: ${ctx.players.join('; ')}` : 'Joueurs: aucun',
-      ctx.staff.length ? `Staff: ${ctx.staff.join('; ')}` : 'Staff: aucun',
-      ctx.injuries.length ? `Blessures: ${ctx.injuries.join('; ')}` : 'Blessures: aucune',
-      ctx.contractsExpiring.length
-        ? `Contrats expirant: ${ctx.contractsExpiring.join('; ')}`
-        : 'Contrats expirant: aucun sous 90j',
-      ctx.upcomingEvents.length
-        ? `Prochains événements: ${ctx.upcomingEvents.join('; ')}`
-        : 'Prochains événements: aucun',
+      '=== SNAPSHOT BASE DE DONNÉES CLUB (ODIN ERP) ===',
+      'Utilise EXCLUSIVEMENT ces données pour répondre. Ne dis jamais que les données manquent si elles sont ci-dessous.',
+      'Pour "joueur le plus évalué": utilise rankings.topOvr ou rankings.topMarketValue ou OVR/marketValue des joueurs.',
+      JSON.stringify(snapshot),
     ].join('\n');
   }
 
@@ -2435,6 +2776,7 @@ ${this.formatClubContextText(ctx)}`,
       suggestedActions: this.buildSuggestedActions(ctx),
       suggestedQuestions: [
         'Quel est l\'état de l\'effectif ?',
+        'Quel est le joueur le plus évalué de l\'équipe ?',
         'Y a-t-il des contrats à renouveler ?',
         'Résumé budget du club',
       ],
@@ -2470,14 +2812,19 @@ ${this.formatClubContextText(ctx)}`,
       config.apiKey,
       config.model,
       `Tu es l'assistant IA du club ${ctx.clubName} sur ODIN ERP (football tunisien).
-Réponds en français, de façon concise et professionnelle. Utilise les données du club fournies.
-Si une information manque, dis-le clairement. Donne des recommandations actionnables quand pertinent.`,
-      `Données du club:
+Tu as accès COMPLET au snapshot base de données du club ci-dessous.
+Règles:
+- Réponds UNIQUEMENT à partir des données fournies (joueurs, OVR, valeur marchande, stats matchs, contrats, finances, blessures, staff, etc.)
+- Ne dis JAMAIS que tu n'as pas accès aux données si elles sont dans le snapshot
+- Pour le joueur "le plus évalué": utilise OVR (overall) ou marketValue selon la question
+- Réponds en français, concis, avec noms et chiffres précis
+- Donne des recommandations actionnables quand pertinent`,
+      `SNAPSHOT BASE DE DONNÉES:
 ${contextText}
 ${dto.context ? `\nContexte additionnel: ${dto.context}` : ''}
 
 Question: ${dto.question}`,
-      800,
+      1200,
     );
 
     return {
