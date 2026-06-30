@@ -18,9 +18,11 @@ import type { JwtPayload } from '../auth/jwt-payload.interface';
 import { ClubService } from './club.service';
 import { PreparateurService } from './preparateur.service';
 import { CoachService } from './coach.service';
+import { MedicalService } from './medical.service';
 import { PermissionsGuard } from './guards/permissions.guard';
 import { RequirePermission } from './decorators/require-permission.decorator';
 import { ClubAiChatDto } from './dto/club-ai-chat.dto';
+import { MedicalAiPlayerDto } from './dto/medical-ai-player.dto';
 
 @Controller('club')
 @UseGuards(JwtAuthGuard)
@@ -29,6 +31,7 @@ export class ClubController {
     private readonly club: ClubService,
     private readonly preparateur: PreparateurService,
     private readonly coach: CoachService,
+    private readonly medical: MedicalService,
   ) {}
 
   private ip(req: Request) {
@@ -805,6 +808,26 @@ export class ClubController {
   @Post('coach/ai/chat')
   chatCoachAi(@CurrentUser() user: JwtPayload, @Body() dto: ClubAiChatDto) {
     return this.coach.chatCoachAi(user, dto);
+  }
+
+  @Get('medical/ai')
+  getMedicalAi(@CurrentUser() user: JwtPayload) {
+    return this.medical.getMedicalAi(user);
+  }
+
+  @Post('medical/ai/analyze')
+  analyzeMedicalPlayer(@CurrentUser() user: JwtPayload, @Body() dto: MedicalAiPlayerDto) {
+    return this.medical.analyzePlayer(user, dto.playerId);
+  }
+
+  @Post('medical/ai/chat')
+  chatMedicalAi(@CurrentUser() user: JwtPayload, @Body() dto: ClubAiChatDto) {
+    return this.medical.chatMedicalAi(user, dto);
+  }
+
+  @Post('medical/ai/report')
+  generateMedicalReport(@CurrentUser() user: JwtPayload, @Body() dto: MedicalAiPlayerDto) {
+    return this.medical.generateReport(user, dto.playerId);
   }
 
   @Get('ai')
