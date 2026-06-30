@@ -12,6 +12,7 @@ import { AnalysteModule } from './analyste/analyste.module';
 import { ResponsableModule } from './responsable/responsable.module';
 import { JoueurModule } from './joueur/joueur.module';
 import { ScoutModule } from './scout/scout.module';
+import { RecruteurModule } from './recruteur/recruteur.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { ScoutModule } from './scout/scout.module';
     ResponsableModule,
     JoueurModule,
     ScoutModule,
+    RecruteurModule,
   ],
   controllers: [AppController],
   providers: [AppService],

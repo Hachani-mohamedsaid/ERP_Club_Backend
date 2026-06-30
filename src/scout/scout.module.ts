@@ -7,5 +7,6 @@ import { ScoutService } from './scout.service';
   imports: [ClubModule],
   controllers: [ScoutController],
   providers: [ScoutService],
+  exports: [ScoutService],
 })
 export class ScoutModule {}
