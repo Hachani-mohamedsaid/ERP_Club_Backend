@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { JwtPayload } from '../auth/jwt-payload.interface';
 import { PrismaService } from '../prisma/prisma.service';
 import { ClubAccessService } from '../club/club-access.service';
@@ -254,6 +255,52 @@ export class JoueurService {
     };
   }
 
+  private normalizeReport(
+    ctx: Awaited<ReturnType<typeof this.buildJoueurAiContext>>,
+    partial: Record<string, unknown>,
+  ) {
+    const base = this.fallbackReport(ctx);
+    const weekly = partial.weeklyInsights as Record<string, string> | undefined;
+    const injury = partial.injuryPrevention as Record<string, unknown> | undefined;
+
+    return {
+      weeklyInsights: {
+        speedChange: weekly?.speedChange ?? base.weeklyInsights.speedChange,
+        enduranceChange: weekly?.enduranceChange ?? base.weeklyInsights.enduranceChange,
+        fatigueRisk: weekly?.fatigueRisk ?? base.weeklyInsights.fatigueRisk,
+        advice: weekly?.advice ?? base.weeklyInsights.advice,
+      },
+      strengths: Array.isArray(partial.strengths) && partial.strengths.length
+        ? (partial.strengths as typeof base.strengths)
+        : base.strengths,
+      weaknesses: Array.isArray(partial.weaknesses) && partial.weaknesses.length
+        ? (partial.weaknesses as typeof base.weaknesses)
+        : base.weaknesses,
+      trainingPlan: Array.isArray(partial.trainingPlan) && partial.trainingPlan.length
+        ? (partial.trainingPlan as typeof base.trainingPlan)
+        : base.trainingPlan,
+      injuryPrevention: {
+        zone: String(injury?.zone ?? base.injuryPrevention.zone),
+        risk: typeof injury?.risk === 'number' ? injury.risk : base.injuryPrevention.risk,
+        level: String(injury?.level ?? base.injuryPrevention.level),
+        advice: String(injury?.advice ?? base.injuryPrevention.advice),
+      },
+      recommendations: Array.isArray(partial.recommendations) && partial.recommendations.length
+        ? (partial.recommendations as string[])
+        : base.recommendations,
+      suggestedQuestions: Array.isArray(partial.suggestedQuestions) && partial.suggestedQuestions.length
+        ? (partial.suggestedQuestions as string[])
+        : base.suggestedQuestions,
+      chatHistory: Array.isArray(partial.chatHistory)
+        ? (partial.chatHistory as typeof base.chatHistory)
+        : base.chatHistory,
+      clubName: ctx.clubName,
+      playerName: ctx.player.name,
+      position: ctx.player.position,
+      ovr: ctx.player.ovr,
+    };
+  }
+
   async getJoueurAi(user: JwtPayload) {
     const [config, ctx] = await Promise.all([
       this.resolveAiConfig(),
@@ -287,7 +334,7 @@ export class JoueurService {
 
     if (cacheValid) {
       return {
-        ...cache.report,
+        ...this.normalizeReport(ctx, cache.report),
         cached: true,
         generatedAt: cache.generatedAt,
         model: config.model,
@@ -305,10 +352,12 @@ export class JoueurService {
     }
 
     const started = Date.now();
-    const raw = await this.callOpenAi(
-      config.apiKey,
-      config.model,
-      `Tu es ODIN AI Coach, assistant personnel du joueur de football.
+    let parsed: Record<string, unknown> = {};
+    try {
+      const raw = await this.callOpenAi(
+        config.apiKey,
+        config.model,
+        `Tu es ODIN AI Coach, assistant personnel du joueur de football.
 Génère un rapport hebdomadaire personnalisé UNIQUEMENT en JSON valide:
 {
   "weeklyInsights": {
@@ -333,31 +382,26 @@ Règles:
 - 6 jours trainingPlan (Lundi-Samedi)
 - 3-4 recommendations concrètes
 - Ton coach bienveillant en français`,
-      JSON.stringify(ctx),
-      2200,
-    );
-
-    let parsed: Record<string, unknown> = {};
-    try {
-      parsed = JSON.parse(raw.replace(/```json\n?|\n?```/g, ''));
+        JSON.stringify(ctx),
+        2200,
+      );
+      try {
+        parsed = JSON.parse(raw.replace(/```json\n?|\n?```/g, ''));
+      } catch {
+        parsed = {};
+      }
     } catch {
-      parsed = this.fallbackReport(ctx);
+      parsed = {};
     }
 
-    const report = {
-      ...parsed,
-      clubName: ctx.clubName,
-      playerName: ctx.player.name,
-      position: ctx.player.position,
-      ovr: ctx.player.ovr,
-    };
+    const report = this.normalizeReport(ctx, parsed);
 
     await this.saveReportCache(ctx.player.id, report);
 
     return {
       ...report,
       cached: false,
-      aiGenerated: true,
+      aiGenerated: Object.keys(parsed).length > 0,
       durationMs: Date.now() - started,
       model: config.model,
       generatedAt: new Date().toISOString(),
@@ -401,13 +445,34 @@ Utilise les données réelles du snapshot. Max 120 mots.`,
   private async resolvePlayerId(user: JwtPayload): Promise<string> {
     const organizationId = this.orgId(user);
     const member = await this.prisma.clubMember.findFirst({
-      where: { organizationId, email: user.email },
+      where: {
+        organizationId,
+        OR: [
+          { email: { equals: user.email, mode: Prisma.QueryMode.insensitive } },
+          ...(user.fullName
+            ? [{ fullName: { equals: user.fullName, mode: Prisma.QueryMode.insensitive }, clubRole: 'JOUEUR' as const }]
+            : []),
+        ],
+      },
       select: { clubPlayerId: true, clubRole: true },
     });
-    if (!member?.clubPlayerId) {
-      throw new ForbiddenException('Aucun joueur lié à ce compte.');
+
+    if (member?.clubPlayerId) {
+      return member.clubPlayerId;
     }
-    return member.clubPlayerId;
+
+    if (user.fullName) {
+      const player = await this.prisma.clubPlayer.findFirst({
+        where: {
+          organizationId,
+          fullName: { equals: user.fullName, mode: Prisma.QueryMode.insensitive },
+        },
+        select: { id: true },
+      });
+      if (player) return player.id;
+    }
+
+    throw new ForbiddenException('Aucun joueur lié à ce compte.');
   }
 
   async getMe(user: JwtPayload) {
