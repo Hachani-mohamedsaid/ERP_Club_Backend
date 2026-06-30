@@ -19,6 +19,7 @@ import { ClubService } from './club.service';
 import { PreparateurService } from './preparateur.service';
 import { PermissionsGuard } from './guards/permissions.guard';
 import { RequirePermission } from './decorators/require-permission.decorator';
+import { ClubAiChatDto } from './dto/club-ai-chat.dto';
 
 @Controller('club')
 @UseGuards(JwtAuthGuard)
@@ -782,5 +783,15 @@ export class ClubController {
   @RequirePermission('Finances', 'delete')
   deleteInvoice(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.club.deleteInvoice(user, id);
+  }
+
+  @Get('ai')
+  getClubAi(@CurrentUser() user: JwtPayload) {
+    return this.club.getClubAi(user);
+  }
+
+  @Post('ai/chat')
+  chatClubAi(@CurrentUser() user: JwtPayload, @Body() dto: ClubAiChatDto) {
+    return this.club.chatClubAi(user, dto);
   }
 }

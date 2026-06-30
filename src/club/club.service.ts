@@ -2173,4 +2173,319 @@ export class ClubService {
       ],
     };
   }
+
+  // ─── Club IA (OpenAI) ───────────────────────────────────────────
+
+  private clubAiResponseTimesMs: number[] = [];
+
+  private async resolveAiConfig() {
+    const row = await this.prisma.platformSettings.findUnique({ where: { id: 'default' } });
+    const extended = (row?.extendedSettings ?? {}) as Record<string, unknown>;
+    const enabled = extended.aiEnabled !== false;
+    const model = String(extended.aiModel ?? 'gpt-4o-mini');
+    const apiKey =
+      process.env.OPENAI_API_KEY?.trim() ||
+      String(extended.aiApiKey ?? '').trim();
+    return { enabled, model, apiKey, provider: String(extended.aiProvider ?? 'openai') };
+  }
+
+  private async callOpenAi(
+    apiKey: string,
+    model: string,
+    system: string,
+    userPrompt: string,
+    maxTokens = 900,
+  ): Promise<string> {
+    const started = Date.now();
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.35,
+        max_tokens: maxTokens,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: userPrompt },
+        ],
+      }),
+    });
+
+    const durationMs = Date.now() - started;
+    this.clubAiResponseTimesMs = [...this.clubAiResponseTimesMs.slice(-49), durationMs];
+
+    if (!res.ok) {
+      const errBody = await res.text();
+      throw new BadRequestException(`OpenAI (${res.status}): ${errBody.slice(0, 280)}`);
+    }
+
+    const json = (await res.json()) as {
+      choices?: { message?: { content?: string } }[];
+    };
+    const content = json.choices?.[0]?.message?.content?.trim();
+    if (!content) throw new BadRequestException('Réponse OpenAI vide.');
+    return content;
+  }
+
+  private async buildClubContext(organizationId: string) {
+    await this.syncDashboardStats(organizationId);
+
+    const [org, players, staff, injuries, contracts, events, finance] = await Promise.all([
+      this.prisma.organization.findUnique({
+        where: { id: organizationId },
+        include: { dashboardStats: true },
+      }),
+      this.prisma.clubPlayer.findMany({
+        where: { organizationId },
+        select: { fullName: true, position: true, status: true },
+        take: 20,
+      }),
+      this.prisma.clubStaff.findMany({
+        where: { organizationId },
+        select: { fullName: true, role: true },
+        take: 15,
+      }),
+      this.prisma.clubInjury.findMany({
+        where: { organizationId },
+        select: { playerName: true, injuryType: true, bodyPart: true, riskScore: true },
+        take: 10,
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.clubContract.findMany({
+        where: { organizationId },
+        select: { holderName: true, endDate: true, salaryMonthly: true },
+        take: 15,
+      }),
+      this.prisma.clubCalendarEvent.findMany({
+        where: { organizationId, eventDate: { gte: new Date() } },
+        select: { title: true, eventType: true, eventDate: true },
+        orderBy: { eventDate: 'asc' },
+        take: 5,
+      }),
+      this.prisma.clubFinanceEntry.findMany({ where: { organizationId } }),
+    ]);
+
+    const stats = org?.dashboardStats;
+    const revenue = finance.filter((f) => f.type === 'REVENUE').reduce((s, f) => s + f.amount, 0);
+    const expenses = finance.filter((f) => f.type === 'EXPENSE').reduce((s, f) => s + f.amount, 0);
+    const contractsExpiring = contracts.filter(
+      (c) => c.endDate.getTime() - Date.now() < 90 * 24 * 60 * 60 * 1000,
+    );
+
+    return {
+      clubName: org?.clubName ?? 'Club',
+      league: org?.league ?? '—',
+      season: String(new Date().getFullYear()),
+      playersCount: stats?.playersCount ?? players.length,
+      staffCount: stats?.staffCount ?? staff.length,
+      injuredCount: stats?.injuredCount ?? injuries.length,
+      contractsToRenew: stats?.contractsToRenew ?? contractsExpiring.length,
+      budgetUsedPct: stats?.budgetUsedPct ?? (revenue > 0 ? Math.round((expenses / revenue) * 100) : 0),
+      budgetRemaining: stats?.budgetRemaining ?? Math.max(0, revenue - expenses),
+      revenue,
+      expenses,
+      players: players.map((p) => `${p.fullName} (${p.position}, ${p.status})`),
+      staff: staff.map((s) => `${s.fullName} — ${s.role}`),
+      injuries: injuries.map((i) => `${i.playerName}: ${i.injuryType}${i.bodyPart ? ` (${i.bodyPart})` : ''} — risque ${i.riskScore}%`),
+      contractsExpiring: contractsExpiring.map(
+        (c) => `${c.holderName} — fin ${c.endDate.toLocaleDateString('fr-FR')}`,
+      ),
+      upcomingEvents: events.map(
+        (e) => `${e.title} (${e.eventType}) — ${e.eventDate.toLocaleDateString('fr-FR')}`,
+      ),
+    };
+  }
+
+  private formatClubContextText(ctx: Awaited<ReturnType<ClubService['buildClubContext']>>) {
+    return [
+      `Club: ${ctx.clubName} | Ligue: ${ctx.league} | Saison: ${ctx.season}`,
+      `Effectif: ${ctx.playersCount} joueurs | Staff: ${ctx.staffCount} | Blessés: ${ctx.injuredCount}`,
+      `Finances: revenus ${ctx.revenue.toLocaleString('fr-FR')} DT, dépenses ${ctx.expenses.toLocaleString('fr-FR')} DT, budget utilisé ${ctx.budgetUsedPct}%, reste ${ctx.budgetRemaining.toLocaleString('fr-FR')} DT`,
+      `Contrats à renouveler (<90j): ${ctx.contractsToRenew}`,
+      ctx.players.length ? `Joueurs: ${ctx.players.join('; ')}` : 'Joueurs: aucun',
+      ctx.staff.length ? `Staff: ${ctx.staff.join('; ')}` : 'Staff: aucun',
+      ctx.injuries.length ? `Blessures: ${ctx.injuries.join('; ')}` : 'Blessures: aucune',
+      ctx.contractsExpiring.length
+        ? `Contrats expirant: ${ctx.contractsExpiring.join('; ')}`
+        : 'Contrats expirant: aucun sous 90j',
+      ctx.upcomingEvents.length
+        ? `Prochains événements: ${ctx.upcomingEvents.join('; ')}`
+        : 'Prochains événements: aucun',
+    ].join('\n');
+  }
+
+  private fallbackInsights(ctx: Awaited<ReturnType<ClubService['buildClubContext']>>) {
+    const insights: { text: string; severity: string }[] = [];
+    insights.push({
+      text:
+        ctx.playersCount === 0
+          ? 'Aucun joueur enregistré dans l\'effectif.'
+          : `${ctx.playersCount} joueur(s) dans l'effectif.`,
+      severity: 'info',
+    });
+    insights.push({
+      text:
+        ctx.staffCount === 0
+          ? 'Aucun membre du staff enregistré.'
+          : `${ctx.staffCount} membre(s) du staff.`,
+      severity: 'info',
+    });
+    if (ctx.injuredCount > 0) {
+      insights.push({
+        text: `${ctx.injuredCount} joueur(s) blessé(s) — suivi médical recommandé.`,
+        severity: 'warning',
+      });
+    }
+    if (ctx.contractsToRenew > 0) {
+      insights.push({
+        text: `${ctx.contractsToRenew} contrat(s) à renouveler sous 90 jours.`,
+        severity: 'warning',
+      });
+    }
+    if (ctx.budgetUsedPct > 90 && ctx.revenue > 0) {
+      insights.push({
+        text: `Budget utilisé à ${ctx.budgetUsedPct}% — vigilance financière.`,
+        severity: 'danger',
+      });
+    } else if (ctx.revenue === 0) {
+      insights.push({
+        text: 'Budget non configuré — ajoutez des entrées financières.',
+        severity: 'warning',
+      });
+    } else {
+      insights.push({
+        text: `Budget utilisé à ${ctx.budgetUsedPct}%.`,
+        severity: ctx.budgetUsedPct > 75 ? 'warning' : 'info',
+      });
+    }
+    return insights.slice(0, 4);
+  }
+
+  private buildSuggestedActions(ctx: Awaited<ReturnType<ClubService['buildClubContext']>>) {
+    const actions = [
+      { label: 'Voir calendrier', path: '/club/calendrier' },
+      { label: 'Gérer contrats', path: '/club/contrats' },
+      { label: 'Suivi médical', path: '/club/sante' },
+    ];
+    if (ctx.contractsToRenew > 0) {
+      return [actions[1], actions[2], actions[0]];
+    }
+    if (ctx.injuredCount > 0) {
+      return [actions[2], actions[0], actions[1]];
+    }
+    return actions;
+  }
+
+  async getClubAi(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const [config, ctx] = await Promise.all([
+      this.resolveAiConfig(),
+      this.buildClubContext(organizationId),
+    ]);
+
+    const hasKey = config.apiKey.length > 0;
+    const status = !config.enabled ? 'disabled' : hasKey ? 'available' : 'no_key';
+    const avgMs =
+      this.clubAiResponseTimesMs.length > 0
+        ? Math.round(
+            this.clubAiResponseTimesMs.reduce((a, b) => a + b, 0) /
+              this.clubAiResponseTimesMs.length,
+          )
+        : null;
+
+    let insights = this.fallbackInsights(ctx);
+    let summary = insights.map((i) => i.text).slice(0, 3);
+
+    if (status === 'available') {
+      try {
+        const raw = await this.callOpenAi(
+          config.apiKey,
+          config.model,
+          'Tu es l\'assistant IA d\'un club de football sur ODIN ERP. Réponds UNIQUEMENT en JSON valide, en français.',
+          `Analyse ce club et retourne JSON:
+{"insights":[{"text":"...","severity":"info|warning|danger"}],"summary":["ligne1","ligne2","ligne3"]}
+Maximum 4 insights pertinents et actionnables.
+Données club:
+${this.formatClubContextText(ctx)}`,
+          600,
+        );
+        const parsed = JSON.parse(raw.replace(/```json\n?|\n?```/g, '')) as {
+          insights?: { text: string; severity: string }[];
+          summary?: string[];
+        };
+        if (parsed.insights?.length) insights = parsed.insights.slice(0, 4);
+        if (parsed.summary?.length) summary = parsed.summary.slice(0, 3);
+      } catch {
+        // fallback insights already set
+      }
+    }
+
+    return {
+      status,
+      model: config.model,
+      provider: config.provider,
+      hasApiKey: hasKey,
+      clubName: ctx.clubName,
+      season: ctx.season,
+      insights,
+      summary,
+      suggestedActions: this.buildSuggestedActions(ctx),
+      suggestedQuestions: [
+        'Quel est l\'état de l\'effectif ?',
+        'Y a-t-il des contrats à renouveler ?',
+        'Résumé budget du club',
+      ],
+      avgResponseTime: avgMs != null ? `${(avgMs / 1000).toFixed(1)}s` : '—',
+      snapshot: {
+        playersCount: ctx.playersCount,
+        staffCount: ctx.staffCount,
+        injuredCount: ctx.injuredCount,
+        contractsToRenew: ctx.contractsToRenew,
+        budgetUsedPct: ctx.budgetUsedPct,
+      },
+    };
+  }
+
+  async chatClubAi(user: JwtPayload, dto: { question: string; context?: string }) {
+    const organizationId = this.orgId(user);
+    const config = await this.resolveAiConfig();
+
+    if (!config.enabled) {
+      throw new BadRequestException('Assistant IA désactivé sur la plateforme.');
+    }
+    if (!config.apiKey) {
+      throw new BadRequestException(
+        'Clé OpenAI manquante. Contactez l\'administrateur plateforme.',
+      );
+    }
+
+    const ctx = await this.buildClubContext(organizationId);
+    const contextText = this.formatClubContextText(ctx);
+    const started = Date.now();
+
+    const result = await this.callOpenAi(
+      config.apiKey,
+      config.model,
+      `Tu es l'assistant IA du club ${ctx.clubName} sur ODIN ERP (football tunisien).
+Réponds en français, de façon concise et professionnelle. Utilise les données du club fournies.
+Si une information manque, dis-le clairement. Donne des recommandations actionnables quand pertinent.`,
+      `Données du club:
+${contextText}
+${dto.context ? `\nContexte additionnel: ${dto.context}` : ''}
+
+Question: ${dto.question}`,
+      800,
+    );
+
+    return {
+      question: dto.question,
+      answer: result,
+      durationMs: Date.now() - started,
+      model: config.model,
+      clubName: ctx.clubName,
+    };
+  }
 }
