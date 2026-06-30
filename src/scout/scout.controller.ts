@@ -5,6 +5,7 @@ import type { JwtPayload } from '../auth/jwt-payload.interface';
 import { ScoutService } from './scout.service';
 import { ScoutMapService } from './scout-map.service';
 import { ScoutAiService } from './scout-ai.service';
+import { ScoutAgentsService } from './scout-agents.service';
 
 @Controller('scout')
 @UseGuards(JwtAuthGuard)
@@ -13,6 +14,7 @@ export class ScoutController {
     private readonly scout: ScoutService,
     private readonly scoutMap: ScoutMapService,
     private readonly scoutAi: ScoutAiService,
+    private readonly scoutAgents: ScoutAgentsService,
   ) {}
 
   @Get('dashboard')
@@ -141,5 +143,20 @@ export class ScoutController {
   @Post('ai/search')
   searchScoutAi(@CurrentUser() user: JwtPayload, @Body() body: { query: string }) {
     return this.scoutAi.searchScoutAi(user, body.query);
+  }
+
+  @Get('agents')
+  getAgents(@CurrentUser() user: JwtPayload, @Query('refresh') refresh?: string) {
+    return this.scoutAgents.getAgents(user, refresh === '1' || refresh === 'true');
+  }
+
+  @Get('agents/:agentId/history')
+  getAgentHistory(@CurrentUser() user: JwtPayload, @Param('agentId') agentId: string) {
+    return this.scoutAgents.getAgentHistory(user, agentId);
+  }
+
+  @Get('agents/:agentId/contact')
+  getAgentContactDraft(@CurrentUser() user: JwtPayload, @Param('agentId') agentId: string) {
+    return this.scoutAgents.getContactDraft(user, agentId);
   }
 }
