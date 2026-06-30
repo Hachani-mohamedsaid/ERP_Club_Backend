@@ -145,6 +145,21 @@ export class ScoutController {
     return this.scoutAi.searchScoutAi(user, body.query);
   }
 
+  @Get('agents/suggestions')
+  suggestAgents(@CurrentUser() user: JwtPayload) {
+    return this.scoutAgents.suggestAgents(user);
+  }
+
+  @Post('agents/search')
+  searchAgents(@CurrentUser() user: JwtPayload, @Body() body: { query: string }) {
+    return this.scoutAgents.searchAgents(user, body.query);
+  }
+
+  @Post('agents/add')
+  addAgent(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
+    return this.scoutAgents.addAgent(user, body);
+  }
+
   @Get('agents')
   getAgents(@CurrentUser() user: JwtPayload, @Query('refresh') refresh?: string) {
     return this.scoutAgents.getAgents(user, refresh === '1' || refresh === 'true');
@@ -158,5 +173,10 @@ export class ScoutController {
   @Get('agents/:agentId/contact')
   getAgentContactDraft(@CurrentUser() user: JwtPayload, @Param('agentId') agentId: string) {
     return this.scoutAgents.getContactDraft(user, agentId);
+  }
+
+  @Delete('agents/:agentId')
+  removeAgent(@CurrentUser() user: JwtPayload, @Param('agentId') agentId: string) {
+    return this.scoutAgents.removeAgent(user, agentId);
   }
 }
