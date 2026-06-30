@@ -383,7 +383,7 @@ Règles:
 - 3-4 recommendations concrètes
 - Ton coach bienveillant en français`,
         JSON.stringify(ctx),
-        2200,
+        1400,
       );
       try {
         parsed = JSON.parse(raw.replace(/```json\n?|\n?```/g, ''));
