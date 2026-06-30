@@ -19,6 +19,7 @@ import { ClubService } from './club.service';
 import { PreparateurService } from './preparateur.service';
 import { CoachService } from './coach.service';
 import { MedicalService } from './medical.service';
+import { FinanceAiService } from './finance-ai.service';
 import { PermissionsGuard } from './guards/permissions.guard';
 import { RequirePermission } from './decorators/require-permission.decorator';
 import { ClubAiChatDto } from './dto/club-ai-chat.dto';
@@ -32,6 +33,7 @@ export class ClubController {
     private readonly preparateur: PreparateurService,
     private readonly coach: CoachService,
     private readonly medical: MedicalService,
+    private readonly financeAi: FinanceAiService,
   ) {}
 
   private ip(req: Request) {
@@ -828,6 +830,16 @@ export class ClubController {
   @Post('medical/ai/report')
   generateMedicalReport(@CurrentUser() user: JwtPayload, @Body() dto: MedicalAiPlayerDto) {
     return this.medical.generateReport(user, dto.playerId);
+  }
+
+  @Get('finance/ai')
+  getFinanceAi(@CurrentUser() user: JwtPayload) {
+    return this.financeAi.getFinanceAi(user);
+  }
+
+  @Post('finance/ai/chat')
+  chatFinanceAi(@CurrentUser() user: JwtPayload, @Body() dto: ClubAiChatDto) {
+    return this.financeAi.chatFinanceAi(user, dto);
   }
 
   @Get('ai')
