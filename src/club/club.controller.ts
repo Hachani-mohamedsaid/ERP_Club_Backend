@@ -500,6 +500,16 @@ export class ClubController {
     return this.preparateur.deleteRecoverySession(user, id);
   }
 
+  @Get('preparateur/ai')
+  getPreparateurAi(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getPreparateurAi(user);
+  }
+
+  @Post('preparateur/ai/chat')
+  chatPreparateurAi(@CurrentUser() user: JwtPayload, @Body() dto: ClubAiChatDto) {
+    return this.preparateur.chatPreparateurAi(user, dto);
+  }
+
   // ─── Player Photo ────────────────────────────────────────────────
 
   @Patch('players/:id/photo')

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { JwtPayload } from '../auth/jwt-payload.interface';
 import { PrismaService } from '../prisma/prisma.service';
 import { ClubAccessService } from './club-access.service';
@@ -1198,5 +1198,469 @@ export class PreparateurService {
       default:
         return { load: 55, fatigue: 30, recovery: 70 };
     }
+  }
+
+  // ─── IA Préparateur (OpenAI) ───────────────────────────────────
+
+  private prepAiResponseTimesMs: number[] = [];
+
+  private async resolveAiConfig() {
+    const row = await this.prisma.platformSettings.findUnique({ where: { id: 'default' } });
+    const extended = (row?.extendedSettings ?? {}) as Record<string, unknown>;
+    const enabled = extended.aiEnabled !== false;
+    const model = String(extended.aiModel ?? 'gpt-4o-mini');
+    const apiKey =
+      process.env.OPENAI_API_KEY?.trim() ||
+      String(extended.aiApiKey ?? '').trim();
+    return { enabled, model, apiKey, provider: String(extended.aiProvider ?? 'openai') };
+  }
+
+  private async callOpenAi(
+    apiKey: string,
+    model: string,
+    system: string,
+    userPrompt: string,
+    maxTokens = 1200,
+  ): Promise<string> {
+    const started = Date.now();
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.35,
+        max_tokens: maxTokens,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: userPrompt },
+        ],
+      }),
+    });
+
+    const durationMs = Date.now() - started;
+    this.prepAiResponseTimesMs = [...this.prepAiResponseTimesMs.slice(-49), durationMs];
+
+    if (!res.ok) {
+      const errBody = await res.text();
+      throw new BadRequestException(`OpenAI (${res.status}): ${errBody.slice(0, 280)}`);
+    }
+
+    const json = (await res.json()) as {
+      choices?: { message?: { content?: string } }[];
+    };
+    const content = json.choices?.[0]?.message?.content?.trim();
+    if (!content) throw new BadRequestException('Réponse OpenAI vide.');
+    return content;
+  }
+
+  private wellnessScore(entry?: {
+    sommeil: number;
+    fatigue: number;
+    stress: number;
+    douleur: number;
+    humeur: number;
+  }) {
+    if (!entry) return null;
+    return Math.round(
+      ((entry.sommeil + (10 - entry.fatigue) + (10 - entry.stress) + (10 - entry.douleur) + entry.humeur) /
+        50) *
+        100,
+    );
+  }
+
+  private async buildPreparateurContext(organizationId: string) {
+    const [
+      org,
+      players,
+      loads,
+      injuryRisks,
+      wellnessEntries,
+      matchReadiness,
+      sessionPresences,
+      injuries,
+      programs,
+      recoverySessions,
+      calendarEvents,
+      profiles,
+    ] = await Promise.all([
+      this.prisma.organization.findUnique({
+        where: { id: organizationId },
+        select: { clubName: true, league: true },
+      }),
+      this.prisma.clubPlayer.findMany({
+        where: { organizationId },
+        orderBy: { fullName: 'asc' },
+      }),
+      this.prisma.playerLoad.findMany({
+        where: { organizationId },
+        orderBy: { sessionDate: 'desc' },
+        take: 200,
+      }),
+      this.prisma.injuryRisk.findMany({
+        where: { organizationId },
+        include: { player: { select: { fullName: true, position: true } } },
+        orderBy: { risk: 'desc' },
+      }),
+      this.prisma.wellnessEntry.findMany({ where: { organizationId } }),
+      this.prisma.matchReadiness.findMany({
+        where: { organizationId },
+        include: { player: { select: { fullName: true } } },
+      }),
+      this.prisma.sessionPresence.findMany({
+        where: { organizationId },
+        include: { player: { select: { fullName: true } } },
+      }),
+      this.prisma.clubInjury.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+      }),
+      this.prisma.trainingProgram.findMany({ where: { organizationId } }),
+      this.prisma.recoverySession.findMany({
+        where: { organizationId },
+        orderBy: { sessionDate: 'desc' },
+        take: 30,
+        include: { player: { select: { fullName: true } } },
+      }),
+      this.prisma.clubCalendarEvent.findMany({
+        where: { organizationId },
+        orderBy: { eventDate: 'asc' },
+        take: 20,
+      }),
+      this.prisma.clubPlayerProfile.findMany({
+        where: { clubPlayer: { organizationId } },
+        select: { clubPlayerId: true, training: true, evolution: true, aiInsight: true },
+      }),
+    ]);
+
+    const latestLoadByPlayer = new Map<string, (typeof loads)[0]>();
+    const loadHistoryByPlayer = new Map<string, (typeof loads)[0][]>();
+    for (const load of loads) {
+      if (!latestLoadByPlayer.has(load.playerId)) latestLoadByPlayer.set(load.playerId, load);
+      const hist = loadHistoryByPlayer.get(load.playerId) ?? [];
+      if (hist.length < 8) {
+        hist.push(load);
+        loadHistoryByPlayer.set(load.playerId, hist);
+      }
+    }
+
+    const wellnessMap = new Map(wellnessEntries.map((e) => [e.playerId, e]));
+    const readinessMap = new Map(matchReadiness.map((r) => [r.playerId, r]));
+    const presenceMap = new Map(sessionPresences.map((p) => [p.playerId, p]));
+    const profileMap = new Map(profiles.map((p) => [p.clubPlayerId, p]));
+
+    const riskByPlayer = new Map<string, number>();
+    const risksByPlayer = new Map<string, typeof injuryRisks>();
+    for (const risk of injuryRisks) {
+      const prev = riskByPlayer.get(risk.playerId) ?? 0;
+      if (risk.risk > prev) riskByPlayer.set(risk.playerId, risk.risk);
+      const list = risksByPlayer.get(risk.playerId) ?? [];
+      list.push(risk);
+      risksByPlayer.set(risk.playerId, list);
+    }
+
+    const playerRows = players.map((player) => {
+      const load = latestLoadByPlayer.get(player.id);
+      const defaults = this.defaultScores(player.status);
+      const loadScore = load?.loadScore ?? defaults.load;
+      const fatigueScore = load?.fatigueScore ?? defaults.fatigue;
+      const recoveryScore = load?.recoveryScore ?? defaults.recovery;
+      const statut = computeStatus(loadScore, fatigueScore);
+      const wellness = wellnessMap.get(player.id);
+      const readiness = readinessMap.get(player.id);
+      const presence = presenceMap.get(player.id);
+      const profile = profileMap.get(player.id);
+      const radar = (player.radar && typeof player.radar === 'object'
+        ? player.radar
+        : null) as Record<string, number> | null;
+
+      return {
+        id: player.id,
+        name: player.fullName,
+        position: player.position,
+        age: player.age,
+        ovr: player.ovr,
+        status: player.status,
+        loadScore,
+        fatigueScore,
+        recoveryScore,
+        statut,
+        injuryRiskMax: riskByPlayer.get(player.id) ?? 0,
+        injuryZones: (risksByPlayer.get(player.id) ?? []).map((r) => ({
+          zone: r.zone,
+          risk: r.risk,
+          recommendations: r.recommendation,
+        })),
+        wellness: wellness
+          ? {
+              sommeil: wellness.sommeil,
+              fatigue: wellness.fatigue,
+              stress: wellness.stress,
+              douleur: wellness.douleur,
+              humeur: wellness.humeur,
+              score: this.wellnessScore(wellness),
+              filledAt: wellness.filledAt.toISOString().slice(0, 10),
+            }
+          : null,
+        matchReadiness: readiness?.status ?? null,
+        presence: presence?.status ?? null,
+        radar,
+        loadHistory: (loadHistoryByPlayer.get(player.id) ?? []).map((l) => ({
+          date: l.sessionDate.toISOString().slice(0, 10),
+          load: l.loadScore,
+          fatigue: l.fatigueScore,
+          recovery: l.recoveryScore,
+          type: l.sessionType,
+        })),
+        training: profile?.training ?? null,
+        evolution: profile?.evolution ?? null,
+        aiInsight: profile?.aiInsight ?? null,
+      };
+    });
+
+    const critiques = playerRows.filter((p) => p.statut === 'Critique');
+    const attentions = playerRows.filter((p) => p.statut === 'Attention');
+    const avgLoad =
+      playerRows.length > 0
+        ? Math.round(playerRows.reduce((s, p) => s + p.loadScore, 0) / playerRows.length)
+        : 0;
+
+    return {
+      clubName: org?.clubName ?? 'Club',
+      league: org?.league ?? '—',
+      season: String(new Date().getFullYear()),
+      summary: {
+        totalPlayers: playerRows.length,
+        disponibles: players.filter((p) => p.status === 'DISPONIBLE').length,
+        critiques: critiques.length,
+        attentions: attentions.length,
+        avgLoad,
+        injuryRiskCount: injuryRisks.length,
+      },
+      rankings: {
+        highestInjuryRisk: [...playerRows]
+          .sort((a, b) => b.injuryRiskMax - a.injuryRiskMax)
+          .slice(0, 5)
+          .map(({ name, injuryRiskMax, statut, loadScore, fatigueScore }) => ({
+            name,
+            injuryRiskMax,
+            statut,
+            loadScore,
+            fatigueScore,
+          })),
+        highestLoad: [...playerRows]
+          .sort((a, b) => b.loadScore - a.loadScore)
+          .slice(0, 5)
+          .map(({ name, loadScore, fatigueScore, statut }) => ({ name, loadScore, fatigueScore, statut })),
+        lowestRecovery: [...playerRows]
+          .sort((a, b) => a.recoveryScore - b.recoveryScore)
+          .slice(0, 5)
+          .map(({ name, recoveryScore, fatigueScore, statut }) => ({
+            name,
+            recoveryScore,
+            fatigueScore,
+            statut,
+          })),
+        matchReady: playerRows
+          .filter(
+            (p) =>
+              p.matchReadiness === 'ready' ||
+              (p.statut === 'Normal' && p.injuryRiskMax < 40 && p.recoveryScore >= 65),
+          )
+          .map(({ name, matchReadiness, recoveryScore, statut }) => ({
+            name,
+            matchReadiness,
+            recoveryScore,
+            statut,
+          })),
+        needRecovery: [...playerRows]
+          .filter((p) => p.statut !== 'Normal' || p.fatigueScore >= 55 || p.recoveryScore < 50)
+          .sort((a, b) => b.fatigueScore - a.fatigueScore)
+          .slice(0, 5)
+          .map(({ name, fatigueScore, recoveryScore, statut }) => ({
+            name,
+            fatigueScore,
+            recoveryScore,
+            statut,
+          })),
+      },
+      players: playerRows,
+      injuryRisks: injuryRisks.map((r) => ({
+        player: r.player.fullName,
+        position: r.player.position,
+        zone: r.zone,
+        risk: r.risk,
+        recommendations: r.recommendation,
+        medicalComment: r.medicalComment,
+      })),
+      injuries: injuries.map((i) => ({
+        player: i.playerName,
+        type: i.injuryType,
+        bodyPart: i.bodyPart,
+        riskScore: i.riskScore,
+        returnDate: i.returnDate?.toISOString().slice(0, 10) ?? null,
+      })),
+      programs: programs.map((p) => ({
+        name: p.name,
+        objective: p.objective,
+        duration: p.duration,
+        intensity: p.intensity,
+        status: p.status,
+        playerCount: p.playerIds.length,
+      })),
+      recoverySessions: recoverySessions.map((s) => ({
+        player: s.player.fullName,
+        method: s.method,
+        date: s.sessionDate.toISOString().slice(0, 10),
+        duration: s.duration,
+        status: s.status,
+      })),
+      upcomingSessions: calendarEvents
+        .filter((e) => e.eventDate >= new Date())
+        .slice(0, 8)
+        .map((e) => ({
+          title: e.title,
+          type: e.eventType,
+          date: e.eventDate.toISOString().slice(0, 10),
+          time: e.eventTime,
+          extra: e.extraData,
+        })),
+    };
+  }
+
+  private formatPreparateurContextText(ctx: Awaited<ReturnType<PreparateurService['buildPreparateurContext']>>) {
+    return [
+      '=== SNAPSHOT BASE DE DONNÉES PRÉPARATEUR PHYSIQUE (ODIN ERP) ===',
+      'Utilise EXCLUSIVEMENT ces données. Ne dis jamais que tu n\'as pas accès si les infos sont ci-dessous.',
+      'Champs clés: loadScore (charge %), fatigueScore, recoveryScore, statut (Critique/Attention/Normal), injuryRiskMax, wellness, matchReadiness.',
+      JSON.stringify({
+        club: { name: ctx.clubName, league: ctx.league, season: ctx.season },
+        summary: ctx.summary,
+        rankings: ctx.rankings,
+        players: ctx.players,
+        injuryRisks: ctx.injuryRisks,
+        injuries: ctx.injuries,
+        programs: ctx.programs,
+        recoverySessions: ctx.recoverySessions,
+        upcomingSessions: ctx.upcomingSessions,
+      }),
+    ].join('\n');
+  }
+
+  async getPreparateurAi(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const [config, ctx] = await Promise.all([
+      this.resolveAiConfig(),
+      this.buildPreparateurContext(organizationId),
+    ]);
+
+    const hasKey = config.apiKey.length > 0;
+    const status = !config.enabled ? 'disabled' : hasKey ? 'available' : 'no_key';
+    const avgMs =
+      this.prepAiResponseTimesMs.length > 0
+        ? Math.round(
+            this.prepAiResponseTimesMs.reduce((a, b) => a + b, 0) /
+              this.prepAiResponseTimesMs.length,
+          )
+        : null;
+
+    return {
+      status,
+      model: config.model,
+      provider: config.provider,
+      hasApiKey: hasKey,
+      clubName: ctx.clubName,
+      season: ctx.season,
+      summary: ctx.summary,
+      suggestedQuestions: [
+        'Qui risque une blessure ?',
+        'Qui doit récupérer ?',
+        'Qui est prêt pour samedi ?',
+        'Qui progresse le plus ?',
+        'Charge critique ce soir ?',
+      ],
+      avgResponseTime: avgMs != null ? `${(avgMs / 1000).toFixed(1)}s` : '—',
+    };
+  }
+
+  async chatPreparateurAi(user: JwtPayload, dto: { question: string; context?: string }) {
+    const organizationId = this.orgId(user);
+    const config = await this.resolveAiConfig();
+
+    if (!config.enabled) {
+      throw new BadRequestException('Assistant IA désactivé sur la plateforme.');
+    }
+    if (!config.apiKey) {
+      throw new BadRequestException('Clé OpenAI manquante. Contactez l\'administrateur plateforme.');
+    }
+
+    const ctx = await this.buildPreparateurContext(organizationId);
+    const contextText = this.formatPreparateurContextText(ctx);
+    const started = Date.now();
+
+    const raw = await this.callOpenAi(
+      config.apiKey,
+      config.model,
+      `Tu es l'assistant IA préparateur physique du club ${ctx.clubName} sur ODIN ERP.
+Tu as accès COMPLET au snapshot base de données (charge, fatigue, récupération, risques blessure, wellness, disponibilité match).
+Réponds UNIQUEMENT en JSON valide:
+{
+  "text": "résumé en français",
+  "cards": [
+    {
+      "player": "Nom Prénom",
+      "risk": 82,
+      "color": "#EF4444",
+      "reasons": ["raison1", "raison2"],
+      "recommendations": ["action1", "action2"],
+      "ready": true
+    }
+  ]
+}
+Règles:
+- Utilise les VRAIS noms de joueurs du snapshot
+- risk = charge, fatigue ou risque blessure selon la question (0-100)
+- color: #EF4444 critique, #FF7A00 attention, #F59E0B modéré, #22C55E ok, #3B82F6 progression
+- ready: true/false uniquement pour questions disponibilité match
+- Maximum 6 cards pertinentes
+- Ne dis jamais que les données manquent si elles sont dans le snapshot`,
+      `SNAPSHOT:
+${contextText}
+${dto.context ? `\nContexte: ${dto.context}` : ''}
+
+Question: ${dto.question}`,
+      1400,
+    );
+
+    const durationMs = Date.now() - started;
+    let parsed: {
+      text?: string;
+      cards?: {
+        player: string;
+        risk: number;
+        color: string;
+        reasons: string[];
+        recommendations: string[];
+        ready?: boolean;
+      }[];
+    };
+
+    try {
+      parsed = JSON.parse(raw.replace(/```json\n?|\n?```/g, ''));
+    } catch {
+      parsed = { text: raw, cards: [] };
+    }
+
+    return {
+      question: dto.question,
+      text: parsed.text ?? raw,
+      cards: parsed.cards ?? [],
+      durationMs,
+      model: config.model,
+      clubName: ctx.clubName,
+    };
   }
 }
