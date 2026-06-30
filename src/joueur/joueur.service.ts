@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { JwtPayload } from '../auth/jwt-payload.interface';
 import { PrismaService } from '../prisma/prisma.service';
 import { ClubAccessService } from '../club/club-access.service';
@@ -23,6 +23,379 @@ export class JoueurService {
 
   private orgId(user: JwtPayload) {
     return this.access.requireOrganization(user);
+  }
+
+  private async resolveAiConfig() {
+    const row = await this.prisma.platformSettings.findUnique({ where: { id: 'default' } });
+    const extended = (row?.extendedSettings ?? {}) as Record<string, unknown>;
+    const enabled = extended.aiEnabled !== false;
+    const model = String(extended.aiModel ?? 'gpt-4o-mini');
+    const apiKey =
+      process.env.OPENAI_API_KEY?.trim() ||
+      String(extended.aiApiKey ?? '').trim();
+    return { enabled, model, apiKey, provider: String(extended.aiProvider ?? 'openai') };
+  }
+
+  private async callOpenAi(
+    apiKey: string,
+    model: string,
+    system: string,
+    userPrompt: string,
+    maxTokens = 1800,
+  ): Promise<string> {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.35,
+        max_tokens: maxTokens,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: userPrompt },
+        ],
+      }),
+    });
+
+    if (!res.ok) {
+      const errBody = await res.text();
+      throw new BadRequestException(`OpenAI (${res.status}): ${errBody.slice(0, 280)}`);
+    }
+
+    const json = (await res.json()) as {
+      choices?: { message?: { content?: string } }[];
+    };
+    const content = json.choices?.[0]?.message?.content?.trim();
+    if (!content) throw new BadRequestException('Réponse OpenAI vide.');
+    return content;
+  }
+
+  private async buildJoueurAiContext(user: JwtPayload) {
+    const playerId = await this.resolvePlayerId(user);
+    const organizationId = this.orgId(user);
+
+    const [player, org, injuries, loads, matchStats, events, profileRow] = await Promise.all([
+      this.prisma.clubPlayer.findUnique({
+        where: { id: playerId },
+        include: { clubPlayerProfile: true, PlayerAward: true },
+      }),
+      this.prisma.organization.findUnique({
+        where: { id: organizationId },
+        select: { clubName: true, league: true },
+      }),
+      this.prisma.clubInjury.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+      }),
+      this.prisma.playerLoad.findMany({
+        where: { organizationId, playerId },
+        orderBy: { createdAt: 'desc' },
+        take: 8,
+      }),
+      this.prisma.playerMatchStat.findMany({
+        where: { organizationId, playerId },
+        orderBy: { matchDate: 'desc' },
+        take: 10,
+      }),
+      this.prisma.clubCalendarEvent.findMany({
+        where: { organizationId },
+        orderBy: { eventDate: 'asc' },
+        take: 8,
+      }),
+      this.prisma.clubPlayerProfile.findUnique({ where: { clubPlayerId: playerId } }),
+    ]);
+
+    if (!player) throw new NotFoundException('Joueur introuvable.');
+
+    const playerInjuries = injuries.filter(
+      (i) => i.playerName.toLowerCase() === player.fullName.toLowerCase(),
+    );
+
+    return {
+      clubName: org?.clubName ?? 'Club',
+      league: org?.league ?? '—',
+      player: {
+        id: player.id,
+        name: player.fullName,
+        position: player.position,
+        age: player.age,
+        ovr: player.ovr,
+        goals: player.goals,
+        status: player.status,
+        marketValue: player.marketValue,
+        radar: (player.radar as Record<string, number>) ?? DEFAULT_RADAR,
+      },
+      profile: profileRow
+        ? {
+            training: profileRow.training,
+            matchAnalysis: profileRow.matchAnalysis,
+            aiInsight: profileRow.aiInsight,
+            evolution: profileRow.evolution,
+          }
+        : null,
+      injuries: playerInjuries.map((i) => ({
+        type: i.injuryType,
+        bodyPart: i.bodyPart,
+        riskScore: i.riskScore,
+        returnDate: i.returnDate?.toISOString().slice(0, 10) ?? null,
+      })),
+      loads: loads.map((l) => ({
+        loadScore: l.loadScore,
+        fatigueScore: l.fatigueScore,
+        recoveryScore: l.recoveryScore,
+        date: l.createdAt.toISOString().slice(0, 10),
+      })),
+      recentMatches: matchStats.map((m) => ({
+        opponent: m.opponent,
+        result: m.result,
+        goals: m.goals,
+        assists: m.assists,
+        rating: m.rating,
+        date: m.matchDate.toISOString().slice(0, 10),
+      })),
+      upcomingEvents: events
+        .filter((e) => e.eventDate >= new Date())
+        .slice(0, 5)
+        .map((e) => ({
+          title: e.title,
+          type: e.eventType,
+          date: e.eventDate.toISOString().slice(0, 10),
+        })),
+      awards: player.PlayerAward.map((a) => ({ title: a.title, season: a.season })),
+    };
+  }
+
+  private async getReportCache(playerId: string) {
+    const row = await this.prisma.platformSettings.findUnique({ where: { id: 'default' } });
+    const extended = (row?.extendedSettings ?? {}) as Record<string, unknown>;
+    const cache = (extended.joueurAiReportCache ?? {}) as Record<
+      string,
+      { report: Record<string, unknown>; generatedAt: string }
+    >;
+    return cache[playerId] ?? null;
+  }
+
+  private async saveReportCache(playerId: string, report: Record<string, unknown>) {
+    const row = await this.prisma.platformSettings.findUnique({ where: { id: 'default' } });
+    const extended = (row?.extendedSettings ?? {}) as Record<string, unknown>;
+    const cache = (extended.joueurAiReportCache ?? {}) as Record<
+      string,
+      { report: Record<string, unknown>; generatedAt: string }
+    >;
+    cache[playerId] = { report, generatedAt: new Date().toISOString() };
+
+    await this.prisma.platformSettings.upsert({
+      where: { id: 'default' },
+      create: { id: 'default', extendedSettings: { ...extended, joueurAiReportCache: cache } as never },
+      update: { extendedSettings: { ...extended, joueurAiReportCache: cache } as never },
+    });
+  }
+
+  private fallbackReport(ctx: Awaited<ReturnType<typeof this.buildJoueurAiContext>>) {
+    const radar = ctx.player.radar;
+    const strengths = Object.entries(radar)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 3)
+      .map(([key, value]) => ({
+        label: key.charAt(0).toUpperCase() + key.slice(1),
+        value,
+        note: 'Basé sur le radar joueur',
+      }));
+    const weaknesses = Object.entries(radar)
+      .sort(([, a], [, b]) => a - b)
+      .slice(0, 3)
+      .map(([key, value]) => ({
+        label: key.charAt(0).toUpperCase() + key.slice(1),
+        value,
+        note: 'Axe de progression identifié',
+      }));
+
+    return {
+      weeklyInsights: {
+        speedChange: '+5%',
+        enduranceChange: '-2%',
+        fatigueRisk: 'Moyen',
+        advice: 'Repos actif recommandé après charge élevée',
+      },
+      strengths,
+      weaknesses,
+      trainingPlan: [
+        { day: 'Lundi', focus: 'Sprint', detail: 'Vitesse + accélération', intensity: 80, icon: '⚡' },
+        { day: 'Mardi', focus: 'Finishing', detail: 'Finition en surface', intensity: 75, icon: '🎯' },
+        { day: 'Mercredi', focus: 'Repos', detail: 'Récupération active', intensity: 25, icon: '😴' },
+        { day: 'Jeudi', focus: 'Tactique', detail: 'Placement et appels', intensity: 60, icon: '📋' },
+        { day: 'Vendredi', focus: 'Force', detail: 'Renforcement musculaire', intensity: 78, icon: '💪' },
+        { day: 'Samedi', focus: 'Récupération', detail: 'Physio + étirements', intensity: 30, icon: '🧊' },
+      ],
+      injuryPrevention: {
+        zone: ctx.injuries[0]?.bodyPart ?? 'Genou',
+        risk: ctx.injuries[0]?.riskScore ? ctx.injuries[0].riskScore * 10 : 25,
+        level: 'Modéré',
+        advice: 'Surveiller la charge et renforcer la chaîne postérieure',
+      },
+      recommendations: [
+        'Maintenir 7h30 de sommeil minimum avant chaque match',
+        `Travailler le point faible: ${weaknesses[0]?.label ?? 'technique'}`,
+        'Hydratation renforcée les jours de forte intensité',
+      ],
+      suggestedQuestions: [
+        'Comment marquer plus ?',
+        'Comment améliorer ma vitesse ?',
+        'Pourquoi mon score baisse ?',
+        'Comment prévenir les blessures ?',
+      ],
+      chatHistory: [],
+      clubName: ctx.clubName,
+      playerName: ctx.player.name,
+    };
+  }
+
+  async getJoueurAi(user: JwtPayload) {
+    const [config, ctx] = await Promise.all([
+      this.resolveAiConfig(),
+      this.buildJoueurAiContext(user),
+    ]);
+
+    const cache = await this.getReportCache(ctx.player.id);
+    const hasKey = config.apiKey.length > 0;
+    const status = !config.enabled ? 'disabled' : hasKey ? 'available' : 'no_key';
+
+    return {
+      status,
+      model: config.model,
+      provider: config.provider,
+      clubName: ctx.clubName,
+      playerName: ctx.player.name,
+      position: ctx.player.position,
+      ovr: ctx.player.ovr,
+      hasReport: Boolean(cache),
+      reportGeneratedAt: cache?.generatedAt ?? null,
+    };
+  }
+
+  async getJoueurAiReport(user: JwtPayload, refresh = false) {
+    const config = await this.resolveAiConfig();
+    const ctx = await this.buildJoueurAiContext(user);
+
+    const cache = await this.getReportCache(ctx.player.id);
+    const cacheAge = cache ? Date.now() - new Date(cache.generatedAt).getTime() : Infinity;
+    const cacheValid = !refresh && cache && cacheAge < 12 * 60 * 60 * 1000;
+
+    if (cacheValid) {
+      return {
+        ...cache.report,
+        cached: true,
+        generatedAt: cache.generatedAt,
+        model: config.model,
+      };
+    }
+
+    if (!config.enabled || !config.apiKey) {
+      return {
+        ...this.fallbackReport(ctx),
+        cached: false,
+        aiGenerated: false,
+        model: config.model,
+        generatedAt: new Date().toISOString(),
+      };
+    }
+
+    const started = Date.now();
+    const raw = await this.callOpenAi(
+      config.apiKey,
+      config.model,
+      `Tu es ODIN AI Coach, assistant personnel du joueur de football.
+Génère un rapport hebdomadaire personnalisé UNIQUEMENT en JSON valide:
+{
+  "weeklyInsights": {
+    "speedChange": "+8%",
+    "enduranceChange": "-3%",
+    "fatigueRisk": "Faible|Moyen|Élevé",
+    "advice": "conseil court actionnable"
+  },
+  "strengths": [{ "label": "...", "value": 91, "note": "..." }],
+  "weaknesses": [{ "label": "...", "value": 68, "note": "..." }],
+  "trainingPlan": [
+    { "day": "Lundi", "focus": "Sprint|Finishing|Repos|Tactique|Force|Récupération", "detail": "...", "intensity": 85, "icon": "⚡" }
+  ],
+  "injuryPrevention": { "zone": "...", "risk": 32, "level": "Faible|Modéré|Élevé", "advice": "..." },
+  "recommendations": ["...", "...", "..."],
+  "suggestedQuestions": ["...", "...", "..."],
+  "chatHistory": [{ "id": "h1", "period": "Aujourd'hui", "question": "..." }]
+}
+Règles:
+- Utilise EXCLUSIVEMENT les données snapshot du joueur
+- 3 forces, 3 faiblesses (value 50-95)
+- 6 jours trainingPlan (Lundi-Samedi)
+- 3-4 recommendations concrètes
+- Ton coach bienveillant en français`,
+      JSON.stringify(ctx),
+      2200,
+    );
+
+    let parsed: Record<string, unknown> = {};
+    try {
+      parsed = JSON.parse(raw.replace(/```json\n?|\n?```/g, ''));
+    } catch {
+      parsed = this.fallbackReport(ctx);
+    }
+
+    const report = {
+      ...parsed,
+      clubName: ctx.clubName,
+      playerName: ctx.player.name,
+      position: ctx.player.position,
+      ovr: ctx.player.ovr,
+    };
+
+    await this.saveReportCache(ctx.player.id, report);
+
+    return {
+      ...report,
+      cached: false,
+      aiGenerated: true,
+      durationMs: Date.now() - started,
+      model: config.model,
+      generatedAt: new Date().toISOString(),
+    };
+  }
+
+  async chatJoueurAi(user: JwtPayload, question: string) {
+    const config = await this.resolveAiConfig();
+    if (!config.enabled) throw new BadRequestException('Assistant IA désactivé.');
+    if (!config.apiKey) throw new BadRequestException('Clé OpenAI manquante côté serveur.');
+
+    const ctx = await this.buildJoueurAiContext(user);
+    const started = Date.now();
+
+    const raw = await this.callOpenAi(
+      config.apiKey,
+      config.model,
+      `Tu es ODIN AI Coach pour ${ctx.player.name} (${ctx.player.position}, OVR ${ctx.player.ovr}).
+Réponds en JSON: { "text": "réponse coach en français, concise et motivante" }
+Utilise les données réelles du snapshot. Max 120 mots.`,
+      `SNAPSHOT:\n${JSON.stringify(ctx)}\n\nQuestion: ${question}`,
+      600,
+    );
+
+    let parsed: { text?: string } = {};
+    try {
+      parsed = JSON.parse(raw.replace(/```json\n?|\n?```/g, ''));
+    } catch {
+      parsed = { text: raw };
+    }
+
+    return {
+      question,
+      text: parsed.text ?? raw,
+      durationMs: Date.now() - started,
+      model: config.model,
+      playerName: ctx.player.name,
+    };
   }
 
   private async resolvePlayerId(user: JwtPayload): Promise<string> {
