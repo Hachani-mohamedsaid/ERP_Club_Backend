@@ -1,13 +1,19 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { JwtPayload } from '../auth/jwt-payload.interface';
 import { ScoutService } from './scout.service';
+import { ScoutMapService } from './scout-map.service';
+import { ScoutAiService } from './scout-ai.service';
 
 @Controller('scout')
 @UseGuards(JwtAuthGuard)
 export class ScoutController {
-  constructor(private readonly scout: ScoutService) {}
+  constructor(
+    private readonly scout: ScoutService,
+    private readonly scoutMap: ScoutMapService,
+    private readonly scoutAi: ScoutAiService,
+  ) {}
 
   @Get('dashboard')
   getDashboard(@CurrentUser() user: JwtPayload) {
@@ -101,5 +107,39 @@ export class ScoutController {
   @Post('missions')
   createMission(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
     return this.scout.createMission(user, body);
+  }
+
+  @Get('map')
+  getMapOverview(@CurrentUser() user: JwtPayload) {
+    return this.scoutMap.getMapOverview(user);
+  }
+
+  @Get('map/continents/:continentId')
+  getMapCountries(@CurrentUser() user: JwtPayload, @Param('continentId') continentId: string) {
+    return this.scoutMap.getMapCountries(user, continentId);
+  }
+
+  @Get('map/countries/:countryId/teams')
+  getMapTeams(@CurrentUser() user: JwtPayload, @Param('countryId') countryId: string) {
+    return this.scoutMap.getMapTeams(user, countryId);
+  }
+
+  @Get('map/teams/:teamId/squad')
+  getTeamSquad(
+    @CurrentUser() user: JwtPayload,
+    @Param('teamId') teamId: string,
+    @Query('refresh') refresh?: string,
+  ) {
+    return this.scoutMap.getTeamSquad(user, teamId, refresh === '1' || refresh === 'true');
+  }
+
+  @Get('ai')
+  getScoutAi(@CurrentUser() user: JwtPayload) {
+    return this.scoutAi.getScoutAi(user);
+  }
+
+  @Post('ai/search')
+  searchScoutAi(@CurrentUser() user: JwtPayload, @Body() body: { query: string }) {
+    return this.scoutAi.searchScoutAi(user, body.query);
   }
 }
