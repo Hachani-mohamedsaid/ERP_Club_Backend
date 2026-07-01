@@ -3,7 +3,7 @@ services:
     name: erp-club-backend
     runtime: node
     buildCommand: npm install && npm run render:build
-    startCommand: npm run start:prod
+    startCommand: npm run render:start
     envVars:
       - key: NODE_VERSION
         value: "20"

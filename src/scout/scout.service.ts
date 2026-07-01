@@ -253,6 +253,17 @@ export class ScoutService {
     return this.access.requireOrganization(user);
   }
 
+  private rethrowDbError(err: unknown): never {
+    if (err instanceof Prisma.PrismaClientKnownRequestError) {
+      if (err.code === 'P2021' || err.message.includes('does not exist')) {
+        throw new BadRequestException(
+          'Base de données scout non à jour. Redéployez le backend (prisma db push).',
+        );
+      }
+    }
+    throw err;
+  }
+
   private extra(p: { scoutExtra: Prisma.JsonValue | null }): ScoutExtra {
     if (!p.scoutExtra || typeof p.scoutExtra !== 'object' || Array.isArray(p.scoutExtra)) {
       return {};
@@ -464,18 +475,22 @@ export class ScoutService {
 
   async listProspects(user: JwtPayload) {
     const organizationId = this.orgId(user);
-    await this.ensureSeed(organizationId, user.fullName);
+    try {
+      await this.ensureSeed(organizationId, user.fullName);
 
-    const [prospects, watchlist] = await Promise.all([
-      this.prisma.recruitmentProspect.findMany({
-        where: { organizationId },
-        orderBy: { potential: 'desc' },
-      }),
-      this.prisma.scoutWatchlist.findMany({ where: { organizationId } }),
-    ]);
+      const [prospects, watchlist] = await Promise.all([
+        this.prisma.recruitmentProspect.findMany({
+          where: { organizationId },
+          orderBy: { potential: 'desc' },
+        }),
+        this.prisma.scoutWatchlist.findMany({ where: { organizationId } }),
+      ]);
 
-    const watchMap = new Map(watchlist.map((w) => [w.prospectId, w]));
-    return prospects.map((p) => this.formatProspect(p, watchMap.get(p.id)));
+      const watchMap = new Map(watchlist.map((w) => [w.prospectId, w]));
+      return prospects.map((p) => this.formatProspect(p, watchMap.get(p.id)));
+    } catch (err) {
+      this.rethrowDbError(err);
+    }
   }
 
   async getProspect(user: JwtPayload, id: string) {
@@ -594,26 +609,30 @@ export class ScoutService {
 
   async listWatchlist(user: JwtPayload) {
     const organizationId = this.orgId(user);
-    await this.ensureSeed(organizationId, user.fullName);
+    try {
+      await this.ensureSeed(organizationId, user.fullName);
 
-    const entries = await this.prisma.scoutWatchlist.findMany({
-      where: { organizationId },
-      orderBy: { createdAt: 'desc' },
-    });
+      const entries = await this.prisma.scoutWatchlist.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+      });
 
-    const prospectIds = entries.map((e) => e.prospectId);
-    const prospects = await this.prisma.recruitmentProspect.findMany({
-      where: { organizationId, id: { in: prospectIds } },
-    });
+      const prospectIds = entries.map((e) => e.prospectId);
+      const prospects = await this.prisma.recruitmentProspect.findMany({
+        where: { organizationId, id: { in: prospectIds } },
+      });
 
-    const prospectMap = new Map(prospects.map((p) => [p.id, p]));
-    return entries
-      .map((e) => {
-        const p = prospectMap.get(e.prospectId);
-        if (!p) return null;
-        return this.formatProspect(p, e);
-      })
-      .filter(Boolean);
+      const prospectMap = new Map(prospects.map((p) => [p.id, p]));
+      return entries
+        .map((e) => {
+          const p = prospectMap.get(e.prospectId);
+          if (!p) return null;
+          return this.formatProspect(p, e);
+        })
+        .filter(Boolean);
+    } catch (err) {
+      this.rethrowDbError(err);
+    }
   }
 
   async addToWatchlist(user: JwtPayload, prospectId: string, priority = 'B') {
