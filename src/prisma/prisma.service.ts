@@ -1,9 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
-import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
-
-const SQL_MIGRATIONS = ['add-responsable-joueur.sql', 'add-scout-tables.sql'];
+import { runDatabaseBootstrap } from './db-bootstrap';
 
 @Injectable()
 export class PrismaService
@@ -14,33 +11,12 @@ export class PrismaService
 
   async onModuleInit() {
     await this.$connect();
-    await this.runSqlMigrations();
+    this.logger.log('PostgreSQL connecté.');
   }
 
-  /** Applique les migrations SQL additives (tables Responsable, Scout, etc.). */
-  async runSqlMigrations() {
-    const dir = join(process.cwd(), 'prisma', 'migrations');
-    for (const file of SQL_MIGRATIONS) {
-      const path = join(dir, file);
-      if (!existsSync(path)) {
-        this.logger.warn(`Fichier migration introuvable: ${path}`);
-        continue;
-      }
-      try {
-        const sql = readFileSync(path, 'utf8');
-        await this.$executeRawUnsafe(sql);
-        this.logger.log(`Migration SQL OK: ${file}`);
-      } catch (err) {
-        this.logger.error(
-          `Migration SQL échouée (${file}): ${err instanceof Error ? err.message : err}`,
-        );
-      }
-    }
-  }
-
-  /** @deprecated Utiliser runSqlMigrations — conservé pour retry scout. */
+  /** Conservé pour retry scout côté service. */
   async ensureScoutSchema() {
-    await this.runSqlMigrations();
+    runDatabaseBootstrap();
   }
 
   async onModuleDestroy() {

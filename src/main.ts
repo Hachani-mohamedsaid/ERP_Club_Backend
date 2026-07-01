@@ -2,8 +2,11 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { MicroserviceOptions, Transport } from '@nestjs/microservices';
 import { AppModule } from './app.module';
+import { runDatabaseBootstrap } from './prisma/db-bootstrap';
 
 async function bootstrap() {
+  runDatabaseBootstrap();
+
   const app = await NestFactory.create(AppModule);
 
   const frontendOrigins = (process.env.FRONTEND_URL ?? 'http://localhost:5173')

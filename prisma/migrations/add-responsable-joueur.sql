@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS "RecruitmentProspect" (
   "status" "RecruitmentStatus" NOT NULL DEFAULT 'NON_TRAITE',
   "notes" TEXT,
   "scoutName" TEXT,
+  "scoutExtra" JSONB,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "RecruitmentProspect_pkey" PRIMARY KEY ("id"),
