@@ -13,6 +13,7 @@ import { ResponsableModule } from './responsable/responsable.module';
 import { JoueurModule } from './joueur/joueur.module';
 import { ScoutModule } from './scout/scout.module';
 import { RecruteurModule } from './recruteur/recruteur.module';
+import { MessagesModule } from './messages/messages.module';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { RecruteurModule } from './recruteur/recruteur.module';
     JoueurModule,
     ScoutModule,
     RecruteurModule,
+    MessagesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

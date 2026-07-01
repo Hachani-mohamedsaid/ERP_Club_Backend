@@ -79,6 +79,7 @@ model Organization {
   budgetCategories   BudgetCategory[]
   expenseRequests    ExpenseRequest[]
   authUsers        User[]                    @relation("OrganizationMembers")
+  directConversations ClubDirectConversation[]
 }
 
 model AnalysteModuleData {
@@ -978,4 +979,41 @@ model ClubPlayerProfile {
   updatedAt      DateTime   @updatedAt
 
   @@map("club_player_profiles")
+}
+
+model ClubDirectConversation {
+  id             String              @id @default(uuid())
+  organizationId String
+  participantAId String
+  participantBId String
+  lastMessageAt  DateTime            @default(now())
+  createdAt      DateTime            @default(now())
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  messages       ClubDirectMessage[]
+
+  @@unique([organizationId, participantAId, participantBId])
+  @@index([organizationId, lastMessageAt])
+}
+
+model ClubDirectMessage {
+  id             String                   @id @default(uuid())
+  conversationId String
+  senderMemberId String
+  body           String
+  createdAt      DateTime                 @default(now())
+  conversation   ClubDirectConversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  reads          ClubDirectMessageRead[]
+
+  @@index([conversationId, createdAt])
+}
+
+model ClubDirectMessageRead {
+  id        String            @id @default(uuid())
+  messageId String
+  memberId  String
+  readAt    DateTime          @default(now())
+  message   ClubDirectMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, memberId])
+  @@index([memberId])
 }

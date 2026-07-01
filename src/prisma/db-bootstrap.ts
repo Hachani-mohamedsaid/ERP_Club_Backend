@@ -6,6 +6,7 @@ const logger = new Logger('DbBootstrap');
 const SQL_FILES = [
   'prisma/migrations/add-responsable-joueur.sql',
   'prisma/migrations/add-scout-tables.sql',
+  'prisma/migrations/add-messages-tables.sql',
 ];
 
 function runCmd(label: string, cmd: string) {
