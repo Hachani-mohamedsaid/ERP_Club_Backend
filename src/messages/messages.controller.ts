@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -68,5 +69,20 @@ export class MessagesController {
     @Param('conversationId') conversationId: string,
   ) {
     return this.messages.markConversationRead(user, conversationId);
+  }
+
+  @Delete('conversations/:conversationId')
+  async deleteConversation(
+    @CurrentUser() user: JwtPayload,
+    @Param('conversationId') conversationId: string,
+  ) {
+    const result = await this.messages.deleteConversation(user, conversationId);
+    if (user.organizationId) {
+      this.gateway.emitConversationDeleted(user.organizationId, result.peerMemberId, {
+        conversationId,
+        deletedByMemberId: await this.messages.resolveMemberId(user),
+      });
+    }
+    return result;
   }
 }

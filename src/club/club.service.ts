@@ -1777,19 +1777,60 @@ export class ClubService {
     });
   }
 
+  private parseMoneyAmount(raw: unknown): number {
+    if (typeof raw === 'number' && Number.isFinite(raw)) return Math.abs(raw);
+    const cleaned = String(raw ?? '').replace(/\s/g, '').toUpperCase();
+    const num = parseFloat(cleaned.replace(/[^\d.,]/g, '').replace(',', '.'));
+    if (!Number.isFinite(num)) return 0;
+    if (cleaned.includes('M')) return num * 1_000_000;
+    if (cleaned.includes('K')) return num * 1_000;
+    return num;
+  }
+
   async createTransfer(user: JwtPayload, data: Record<string, unknown>) {
     const organizationId = this.orgId(user);
-    return this.prisma.playerTransfer.create({
+    const playerName = String(data.playerName ?? '').trim();
+    if (!playerName) {
+      throw new BadRequestException('Le nom du joueur est requis.');
+    }
+
+    const transferType = String(data.transferType ?? 'ACHAT').toUpperCase();
+    const club = String(data.club ?? data.toClub ?? data.fromClub ?? '').trim();
+    const fee = this.parseMoneyAmount(data.fee ?? data.value);
+    const value =
+      data.value != null && String(data.value).trim()
+        ? String(data.value)
+        : fee > 0
+          ? `${fee.toLocaleString('fr-FR')} DT`
+          : '0';
+
+    const transfer = await this.prisma.playerTransfer.create({
       data: {
         organizationId,
-        playerName: String(data.playerName ?? ''),
-        transferType: String(data.transferType ?? 'Rumeur'),
-        club: String(data.club ?? ''),
-        value: String(data.value ?? '0'),
-        status: String(data.status ?? 'Scouting'),
-        probability: Number(data.probability ?? 0),
+        playerName,
+        transferType,
+        club,
+        value,
+        status: String(data.status ?? 'Confirmé'),
+        probability: Number(data.probability ?? 100),
       },
     });
+
+    if (fee > 0 && (transferType === 'ACHAT' || transferType === 'VENTE')) {
+      await this.prisma.clubFinanceEntry.create({
+        data: {
+          organizationId,
+          label: `Transfert ${transferType === 'ACHAT' ? 'achat' : 'vente'} — ${playerName}`,
+          amount: fee,
+          type: transferType === 'ACHAT' ? 'EXPENSE' : 'REVENUE',
+          category: 'Transferts',
+          entryDate: new Date(),
+        },
+      });
+      await this.syncDashboardStats(organizationId);
+    }
+
+    return transfer;
   }
 
   async deleteTransfer(user: JwtPayload, id: string) {

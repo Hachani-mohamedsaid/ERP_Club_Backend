@@ -94,19 +94,50 @@ export class MessagesService {
     return hasPeerRead ? 'read' : 'sent';
   }
 
+  private async unreadCountsByConversation(
+    conversationIds: string[],
+    myMemberId: string,
+  ): Promise<Map<string, number>> {
+    if (conversationIds.length === 0) return new Map();
+    const unreadMessages = await this.prisma.clubDirectMessage.findMany({
+      where: {
+        conversationId: { in: conversationIds },
+        senderMemberId: { not: myMemberId },
+        reads: { none: { memberId: myMemberId } },
+      },
+      select: { conversationId: true },
+    });
+    const map = new Map<string, number>();
+    for (const row of unreadMessages) {
+      map.set(row.conversationId, (map.get(row.conversationId) ?? 0) + 1);
+    }
+    return map;
+  }
+
+  private mapContact(
+    m: { id: string; fullName: string; clubRole: Parameters<typeof clubRoleToLabel>[0] },
+    conv: { id: string; messages: { body: string; createdAt: Date }[] } | undefined,
+    unread: number,
+  ) {
+    const last = conv?.messages[0];
+    return {
+      memberId: m.id,
+      name: m.fullName,
+      role: clubRoleToLabel(m.clubRole),
+      avatar: this.initials(m.fullName),
+      conversationId: conv?.id ?? null,
+      preview: last?.body ?? '',
+      time: last ? this.formatTime(last.createdAt) : '',
+      unread,
+      online: false,
+      typing: false,
+    };
+  }
+
   async listContacts(user: JwtPayload, search?: string) {
     const organizationId = this.orgId(user);
     const myMemberId = await this.resolveMemberId(user);
     const q = search?.trim().toLowerCase() ?? '';
-
-    const members = await this.prisma.clubMember.findMany({
-      where: {
-        organizationId,
-        id: { not: myMemberId },
-        status: 'ACTIF',
-      },
-      orderBy: { fullName: 'asc' },
-    });
 
     const conversations = await this.prisma.clubDirectConversation.findMany({
       where: {
@@ -128,35 +159,56 @@ export class MessagesService {
       convByPeer.set(peerId, conv);
     }
 
-    const items = await Promise.all(
-      members.map(async (m) => {
-        const conv = convByPeer.get(m.id);
-        const last = conv?.messages[0];
-        const unread = conv ? await this.unreadCount(conv.id, myMemberId) : 0;
-        return {
-          memberId: m.id,
-          name: m.fullName,
-          role: clubRoleToLabel(m.clubRole),
-          avatar: this.initials(m.fullName),
-          conversationId: conv?.id ?? null,
-          preview: last?.body ?? '',
-          time: last ? this.formatTime(last.createdAt) : '',
-          unread,
-          online: false,
-          typing: false,
-        };
-      }),
+    const unreadMap = await this.unreadCountsByConversation(
+      conversations.map((c) => c.id),
+      myMemberId,
     );
 
-    const filtered = q
-      ? items.filter(
-          (item) =>
-            item.name.toLowerCase().includes(q) ||
-            item.role.toLowerCase().includes(q),
-        )
-      : items;
+    if (!q) {
+      const peerIds = [...convByPeer.keys()];
+      if (peerIds.length === 0) {
+        return { myMemberId, items: [] };
+      }
+      const members = await this.prisma.clubMember.findMany({
+        where: { organizationId, id: { in: peerIds } },
+      });
+      const memberMap = new Map(members.map((m) => [m.id, m]));
+      const withMessages = peerIds
+        .map((id) => memberMap.get(id))
+        .filter((m): m is NonNullable<typeof m> => !!m)
+        .map((m) => {
+          const conv = convByPeer.get(m.id)!;
+          return this.mapContact(m, conv, unreadMap.get(conv.id) ?? 0);
+        })
+        .sort((a, b) => {
+          const ca = convByPeer.get(a.memberId);
+          const cb = convByPeer.get(b.memberId);
+          return (
+            (cb?.lastMessageAt?.getTime() ?? 0) -
+            (ca?.lastMessageAt?.getTime() ?? 0)
+          );
+        });
+      return { myMemberId, items: withMessages };
+    }
 
-    const withMessages = filtered
+    const members = await this.prisma.clubMember.findMany({
+      where: {
+        organizationId,
+        id: { not: myMemberId },
+        status: 'ACTIF',
+        fullName: { contains: q, mode: 'insensitive' },
+      },
+      orderBy: { fullName: 'asc' },
+      take: 40,
+    });
+
+    const items = members.map((m) => {
+      const conv = convByPeer.get(m.id);
+      const unread = conv ? (unreadMap.get(conv.id) ?? 0) : 0;
+      return this.mapContact(m, conv, unread);
+    });
+
+    const withMessages = items
       .filter((i) => i.conversationId)
       .sort((a, b) => {
         const ca = convByPeer.get(a.memberId);
@@ -166,15 +218,50 @@ export class MessagesService {
           (ca?.lastMessageAt?.getTime() ?? 0)
         );
       });
-
-    const withoutMessages = filtered
+    const withoutMessages = items
       .filter((i) => !i.conversationId)
       .sort((a, b) => a.name.localeCompare(b.name, 'fr'));
 
     return {
       myMemberId,
-      items: q ? [...withMessages, ...withoutMessages] : withMessages,
-      searchResults: q ? [...withMessages, ...withoutMessages] : undefined,
+      items: withMessages,
+      searchResults: [...withMessages, ...withoutMessages],
+    };
+  }
+
+  async deleteConversation(user: JwtPayload, conversationId: string) {
+    const organizationId = this.orgId(user);
+    const myMemberId = await this.resolveMemberId(user);
+
+    const conversation = await this.prisma.clubDirectConversation.findFirst({
+      where: {
+        id: conversationId,
+        organizationId,
+        OR: [{ participantAId: myMemberId }, { participantBId: myMemberId }],
+      },
+    });
+    if (!conversation) throw new NotFoundException('Conversation introuvable.');
+
+    const messageIds = await this.prisma.clubDirectMessage.findMany({
+      where: { conversationId },
+      select: { id: true },
+    });
+
+    if (messageIds.length > 0) {
+      await this.prisma.clubDirectMessageRead.deleteMany({
+        where: { messageId: { in: messageIds.map((m) => m.id) } },
+      });
+      await this.prisma.clubDirectMessage.deleteMany({ where: { conversationId } });
+    }
+
+    await this.prisma.clubDirectConversation.delete({ where: { id: conversationId } });
+
+    return {
+      deleted: true,
+      peerMemberId:
+        conversation.participantAId === myMemberId
+          ? conversation.participantBId
+          : conversation.participantAId,
     };
   }
 

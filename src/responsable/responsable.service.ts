@@ -18,6 +18,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ClubAccessService } from '../club/club-access.service';
 import { ClubAuditService } from '../club/club-audit.service';
 import { ValidationRequestService } from '../club/validation-request.service';
+import { ClubService } from '../club/club.service';
 
 const TYPE_LABEL: Record<ValidationRequestType, string> = {
   RECRUTEMENT: 'Recrutement',
@@ -62,6 +63,7 @@ export class ResponsableService {
     private readonly access: ClubAccessService,
     private readonly audit: ClubAuditService,
     private readonly validationRequests: ValidationRequestService,
+    private readonly club: ClubService,
   ) {}
 
   private orgId(user: JwtPayload) {
@@ -500,6 +502,26 @@ export class ResponsableService {
         where: { id: expense.categoryId },
         data: { spent: { increment: expense.amount } },
       });
+    }
+
+    if (action === 'approve') {
+      const financeLabel = `Dépense approuvée — ${expense.label}`;
+      const existing = await this.prisma.clubFinanceEntry.findFirst({
+        where: { organizationId, label: financeLabel },
+      });
+      if (!existing) {
+        await this.prisma.clubFinanceEntry.create({
+          data: {
+            organizationId,
+            label: financeLabel,
+            amount: expense.amount,
+            type: 'EXPENSE',
+            category: expense.category?.name ?? 'Général',
+            entryDate: new Date(),
+          },
+        });
+        await this.club.syncDashboardStats(organizationId);
+      }
     }
 
     await this.audit.log(organizationId, {
