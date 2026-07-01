@@ -55,9 +55,9 @@ VALID_INVITATION_CODES=
    ```
 5. **Start Command** :
    ```bash
-   npm run start:prod
+   npm run render:start
    ```
-   (`start:prod` exécute `prisma db push --accept-data-loss` puis lance l'API.)
+   (`render:start` exécute les migrations SQL puis `prisma db push` avant de lancer l'API.)
 6. **Instance** : Free ou Starter
 
 ### Variables d'environnement (Render Dashboard)
