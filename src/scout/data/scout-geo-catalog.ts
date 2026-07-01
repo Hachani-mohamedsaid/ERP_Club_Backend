@@ -1,3 +1,9 @@
+import {
+  LEAGUE_ROSTERS,
+  normalizeClubName,
+  rosterTeamId,
+} from './league-rosters';
+
 export interface GeoContinent {
   id: string;
   name: string;
@@ -67,6 +73,42 @@ export const COUNTRIES: GeoCountry[] = [
   { id: 'au', continentId: 'oceanie', name: 'Australie', flag: '🇦🇺', flagCode: 'au', color: '#F59E0B', leagues: ['A-League'], leagueId: 'a-league' },
   { id: 'nz', continentId: 'oceanie', name: 'Nouvelle-Zélande', flag: '🇳🇿', flagCode: 'nz', color: '#6366F1', leagues: ['NZ Premiership'], leagueId: 'nz-prem' },
 ];
+
+function rosterToTeams(countryId: string): GeoTeam[] {
+  const roster = LEAGUE_ROSTERS[countryId];
+  if (!roster) return [];
+  return roster.teams.map((t) => ({
+    id: rosterTeamId(countryId, t.name),
+    countryId,
+    name: t.name,
+    league: roster.league,
+    leagueId: roster.leagueId,
+    city: t.city,
+    tier: 'Pro' as const,
+    avgPotential: t.avgPotential ?? 75,
+    scoutActivity: t.scoutActivity ?? 'Moyenne',
+    logoColor: t.logoColor,
+  }));
+}
+
+function mergeTeamLists(base: GeoTeam[], extra: GeoTeam[]): GeoTeam[] {
+  const result: GeoTeam[] = [...base];
+  const matchesExisting = (name: string) =>
+    result.some((t) => {
+      const a = normalizeClubName(t.name);
+      const b = normalizeClubName(name);
+      if (a === b) return true;
+      if (a.includes(b) || b.includes(a)) return true;
+      return matchClubName(t.name, name);
+    });
+
+  for (const t of extra) {
+    if (matchesExisting(t.name)) continue;
+    result.push(t);
+  }
+
+  return result.sort((a, b) => b.avgPotential - a.avgPotential);
+}
 
 export const TEAMS: GeoTeam[] = [
   { id: 'est', countryId: 'tn', name: 'ES Sahel', league: 'Ligue 1 TUN', leagueId: 'l1-tun', city: 'Sousse', tier: 'Pro', avgPotential: 82, scoutActivity: 'Haute', logoColor: 'DC2626' },
@@ -173,7 +215,9 @@ export function getCountriesByContinent(continentId: string) {
 }
 
 export function getTeamsByCountry(countryId: string) {
-  return TEAMS.filter((t) => t.countryId === countryId);
+  const catalog = TEAMS.filter((t) => t.countryId === countryId);
+  const roster = rosterToTeams(countryId);
+  return mergeTeamLists(catalog, roster);
 }
 
 export function getContinent(id: string) {
@@ -185,7 +229,13 @@ export function getCountry(id: string) {
 }
 
 export function getTeam(id: string) {
-  return TEAMS.find((t) => t.id === id);
+  const fromCatalog = TEAMS.find((t) => t.id === id);
+  if (fromCatalog) return fromCatalog;
+  for (const country of COUNTRIES) {
+    const found = rosterToTeams(country.id).find((t) => t.id === id);
+    if (found) return found;
+  }
+  return undefined;
 }
 
 export function matchClubName(prospectClub: string, teamName: string) {

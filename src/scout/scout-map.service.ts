@@ -13,7 +13,9 @@ import {
   getCountry,
   getTeam,
   matchClubName,
+  type GeoTeam,
 } from './data/scout-geo-catalog';
+import { rosterTeamId } from './data/league-rosters';
 
 type SquadPlayer = {
   id: string;
@@ -31,6 +33,7 @@ type SquadPlayer = {
 };
 
 type SquadCache = Record<string, { players: SquadPlayer[]; generatedAt: string }>;
+type TeamCache = Record<string, { teams: GeoTeam[]; generatedAt: string }>;
 
 @Injectable()
 export class ScoutMapService {
@@ -85,6 +88,96 @@ export class ScoutMapService {
     const content = json.choices?.[0]?.message?.content?.trim();
     if (!content) throw new BadRequestException('Réponse OpenAI vide.');
     return content;
+  }
+
+  private async getTeamCache(): Promise<TeamCache> {
+    const row = await this.prisma.platformSettings.findUnique({ where: { id: 'default' } });
+    const extended = (row?.extendedSettings ?? {}) as Record<string, unknown>;
+    const cache = extended.scoutTeamCache;
+    if (cache && typeof cache === 'object' && !Array.isArray(cache)) {
+      return cache as TeamCache;
+    }
+    return {};
+  }
+
+  private async saveTeamCache(countryId: string, teams: GeoTeam[]) {
+    const row = await this.prisma.platformSettings.findUnique({ where: { id: 'default' } });
+    const extended = (row?.extendedSettings ?? {}) as Record<string, unknown>;
+    const cache = (extended.scoutTeamCache ?? {}) as TeamCache;
+    cache[countryId] = { teams, generatedAt: new Date().toISOString() };
+
+    await this.prisma.platformSettings.upsert({
+      where: { id: 'default' },
+      create: {
+        id: 'default',
+        extendedSettings: { ...extended, scoutTeamCache: cache } as never,
+      },
+      update: {
+        extendedSettings: { ...extended, scoutTeamCache: cache } as never,
+      },
+    });
+  }
+
+  private mergeTeamLists(base: GeoTeam[], extra: GeoTeam[]): GeoTeam[] {
+    const result: GeoTeam[] = [...base];
+    for (const t of extra) {
+      const dup = result.some((x) => matchClubName(x.name, t.name));
+      if (!dup) result.push(t);
+    }
+    return result.sort((a, b) => b.avgPotential - a.avgPotential);
+  }
+
+  private async fetchLeagueTeamsFromAi(
+    country: NonNullable<ReturnType<typeof getCountry>>,
+    config: Awaited<ReturnType<ScoutMapService['resolveAiConfig']>>,
+  ): Promise<GeoTeam[]> {
+    if (!config.apiKey) return [];
+    const league = country.leagues[0] ?? 'Division 1';
+    const raw = await this.callOpenAi(
+      config.apiKey,
+      config.model,
+      `Expert football ODIN ERP. Liste TOUS les clubs de la division 1 actuelle du pays.
+Réponds UNIQUEMENT en JSON:
+{"teams":[{"name":"Nom officiel","city":"Ville","avgPotential":75,"scoutActivity":"Moyenne","logoColor":"E30613"}]}
+Règles: liste COMPLÈTE (16-20 clubs), noms réels, saison 2024-25.`,
+      `Pays: ${country.name}\nLigue: ${league}\nLeagueId: ${country.leagueId}`,
+      2800,
+    );
+
+    const parsed = JSON.parse(raw.replace(/```json\n?|\n?```/g, '')) as {
+      teams?: {
+        name: string;
+        city: string;
+        avgPotential?: number;
+        scoutActivity?: string;
+        logoColor?: string;
+      }[];
+    };
+
+    return (parsed.teams ?? []).map((t) => ({
+      id: rosterTeamId(country.id, t.name),
+      countryId: country.id,
+      name: t.name,
+      league,
+      leagueId: country.leagueId,
+      city: t.city,
+      tier: 'Pro' as const,
+      avgPotential: t.avgPotential ?? 74,
+      scoutActivity: (t.scoutActivity as GeoTeam['scoutActivity']) ?? 'Moyenne',
+      logoColor: t.logoColor,
+    }));
+  }
+
+  private async resolveTeam(teamId: string): Promise<GeoTeam | undefined> {
+    const staticTeam = getTeam(teamId);
+    if (staticTeam) return staticTeam;
+
+    const cache = await this.getTeamCache();
+    for (const entry of Object.values(cache)) {
+      const found = entry.teams.find((t) => t.id === teamId);
+      if (found) return found;
+    }
+    return undefined;
   }
 
   private async getSquadCache(): Promise<SquadCache> {
@@ -197,12 +290,36 @@ export class ScoutMapService {
     return { continent, countries };
   }
 
-  async getMapTeams(user: JwtPayload, countryId: string) {
+  async getMapTeams(user: JwtPayload, countryId: string, refresh = false) {
     const country = getCountry(countryId);
     if (!country) throw new NotFoundException('Pays introuvable.');
 
     const prospects = await this.scout.listProspects(user);
-    const teams = getTeamsByCountry(countryId).map((t) => {
+    let allTeams = getTeamsByCountry(countryId);
+
+    const cache = await this.getTeamCache();
+    const cached = cache[countryId];
+    const cacheAge = cached ? Date.now() - new Date(cached.generatedAt).getTime() : Infinity;
+    const cacheValid = !refresh && cached && cacheAge < 30 * 24 * 60 * 60 * 1000;
+
+    if (cacheValid && cached.teams.length > allTeams.length) {
+      allTeams = this.mergeTeamLists(allTeams, cached.teams);
+    } else if (allTeams.length < 12) {
+      const config = await this.resolveAiConfig();
+      if (config.enabled && config.apiKey) {
+        try {
+          const aiTeams = await this.fetchLeagueTeamsFromAi(country, config);
+          if (aiTeams.length > 0) {
+            allTeams = this.mergeTeamLists(allTeams, aiTeams);
+            await this.saveTeamCache(countryId, allTeams);
+          }
+        } catch {
+          /* garde la liste statique */
+        }
+      }
+    }
+
+    const teams = allTeams.map((t) => {
       const dbCount = this.countProspectsForTeam(prospects, t.name);
       return {
         ...t,
@@ -211,7 +328,7 @@ export class ScoutMapService {
       };
     });
 
-    return { country, teams };
+    return { country, teams, total: teams.length };
   }
 
   private mapProspectToSquadPlayer(
@@ -252,7 +369,7 @@ export class ScoutMapService {
   }
 
   async getTeamSquad(user: JwtPayload, teamId: string, refresh = false) {
-    const team = getTeam(teamId);
+    const team = await this.resolveTeam(teamId);
     if (!team) throw new NotFoundException('Équipe introuvable.');
     const country = getCountry(team.countryId);
     if (!country) throw new NotFoundException('Pays introuvable.');
