@@ -145,6 +145,22 @@ export class ScoutController {
     return this.scoutAi.searchScoutAi(user, body.query);
   }
 
+  @Post('search')
+  searchProspects(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      query?: string;
+      position?: string;
+      country?: string;
+      ageRange?: string;
+      potRange?: string;
+      budgetRange?: string;
+    },
+  ) {
+    return this.scoutAi.searchProspects(user, body);
+  }
+
   @Get('agents/suggestions')
   suggestAgents(@CurrentUser() user: JwtPayload) {
     return this.scoutAgents.suggestAgents(user);
