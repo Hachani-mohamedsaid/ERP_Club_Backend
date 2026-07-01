@@ -162,4 +162,13 @@ export class MessagesGateway implements OnGatewayConnection, OnGatewayDisconnect
     this.server.to(this.memberRoom(senderMemberId)).emit('message:read', payload);
     this.server.to(this.orgRoom(orgId)).emit('conversation:read', payload);
   }
+
+  emitConversationDeleted(
+    orgId: string,
+    peerMemberId: string,
+    payload: { conversationId: string; deletedByMemberId: string },
+  ) {
+    this.server.to(this.memberRoom(peerMemberId)).emit('conversation:deleted', payload);
+    this.server.to(this.memberRoom(payload.deletedByMemberId)).emit('conversation:deleted', payload);
+  }
 }

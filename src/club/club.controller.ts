@@ -653,14 +653,14 @@ export class ClubController {
 
   @Post('transfers')
   @UseGuards(PermissionsGuard)
-  @RequirePermission('Joueurs', 'create')
+  @RequirePermission('Finances', 'create')
   createTransfer(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
     return this.club.createTransfer(user, body);
   }
 
   @Delete('transfers/:id')
   @UseGuards(PermissionsGuard)
-  @RequirePermission('Joueurs', 'delete')
+  @RequirePermission('Finances', 'delete')
   deleteTransfer(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.club.deleteTransfer(user, id);
   }
