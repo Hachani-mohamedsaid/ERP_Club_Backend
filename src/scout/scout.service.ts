@@ -253,15 +253,36 @@ export class ScoutService {
     return this.access.requireOrganization(user);
   }
 
-  private rethrowDbError(err: unknown): never {
+  private isScoutSchemaError(err: unknown) {
     if (err instanceof Prisma.PrismaClientKnownRequestError) {
-      if (err.code === 'P2021' || err.message.includes('does not exist')) {
-        throw new BadRequestException(
-          'Base de données scout non à jour. Redéployez le backend (prisma db push).',
-        );
-      }
+      return err.code === 'P2021' || err.code === 'P2022';
+    }
+    return err instanceof Error && err.message.includes('does not exist');
+  }
+
+  private rethrowDbError(err: unknown): never {
+    if (this.isScoutSchemaError(err)) {
+      throw new BadRequestException(
+        'Base de données scout non à jour. Redéployez le backend sur Render (Manual Deploy).',
+      );
     }
     throw err;
+  }
+
+  private async withScoutDb<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (err) {
+      if (!this.isScoutSchemaError(err)) {
+        this.rethrowDbError(err);
+      }
+      await this.prisma.ensureScoutSchema();
+      try {
+        return await fn();
+      } catch (retryErr) {
+        this.rethrowDbError(retryErr);
+      }
+    }
   }
 
   private extra(p: { scoutExtra: Prisma.JsonValue | null }): ScoutExtra {
@@ -376,6 +397,7 @@ export class ScoutService {
   }
 
   async getDashboard(user: JwtPayload) {
+    return this.withScoutDb(async () => {
     const organizationId = this.orgId(user);
     await this.ensureSeed(organizationId, user.fullName);
 
@@ -471,11 +493,12 @@ export class ScoutService {
         extra: m.extraData,
       })),
     };
+    });
   }
 
   async listProspects(user: JwtPayload) {
-    const organizationId = this.orgId(user);
-    try {
+    return this.withScoutDb(async () => {
+      const organizationId = this.orgId(user);
       await this.ensureSeed(organizationId, user.fullName);
 
       const [prospects, watchlist] = await Promise.all([
@@ -488,9 +511,7 @@ export class ScoutService {
 
       const watchMap = new Map(watchlist.map((w) => [w.prospectId, w]));
       return prospects.map((p) => this.formatProspect(p, watchMap.get(p.id)));
-    } catch (err) {
-      this.rethrowDbError(err);
-    }
+    });
   }
 
   async getProspect(user: JwtPayload, id: string) {

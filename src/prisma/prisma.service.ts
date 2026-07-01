@@ -1,10 +1,4 @@
-import {
-  INestApplication,
-  Injectable,
-  Logger,
-  OnModuleDestroy,
-  OnModuleInit,
-} from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 
 @Injectable()
@@ -19,7 +13,8 @@ export class PrismaService
     await this.ensureScoutSchema();
   }
 
-  private async ensureScoutSchema() {
+  /** Crée colonnes/tables scout si absents (safe à rappeler). */
+  async ensureScoutSchema() {
     const statements = [
       `ALTER TABLE "RecruitmentProspect" ADD COLUMN IF NOT EXISTS "scoutExtra" JSONB`,
       `ALTER TABLE "RecruitmentProspect" ADD COLUMN IF NOT EXISTS "scoutName" TEXT`,
