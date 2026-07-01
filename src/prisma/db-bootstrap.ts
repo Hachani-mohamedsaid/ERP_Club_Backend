@@ -7,6 +7,7 @@ const SQL_FILES = [
   'prisma/migrations/add-responsable-joueur.sql',
   'prisma/migrations/add-scout-tables.sql',
   'prisma/migrations/add-messages-tables.sql',
+  'prisma/migrations/add-finance-notification-fields.sql',
 ];
 
 function runCmd(label: string, cmd: string) {

@@ -20,6 +20,7 @@ import { PreparateurService } from './preparateur.service';
 import { CoachService } from './coach.service';
 import { MedicalService } from './medical.service';
 import { FinanceAiService } from './finance-ai.service';
+import { FinanceNotificationsService } from './finance-notifications.service';
 import { PermissionsGuard } from './guards/permissions.guard';
 import { RequirePermission } from './decorators/require-permission.decorator';
 import { ClubAiChatDto } from './dto/club-ai-chat.dto';
@@ -34,6 +35,7 @@ export class ClubController {
     private readonly coach: CoachService,
     private readonly medical: MedicalService,
     private readonly financeAi: FinanceAiService,
+    private readonly financeNotifications: FinanceNotificationsService,
   ) {}
 
   private ip(req: Request) {
@@ -709,6 +711,37 @@ export class ClubController {
   @Get('finance/report')
   getFinanceReport(@CurrentUser() user: JwtPayload) {
     return this.club.getFinanceReport(user);
+  }
+
+  @Get('finance/notifications')
+  getFinanceNotifications(@CurrentUser() user: JwtPayload) {
+    return this.financeNotifications.syncAndList(user);
+  }
+
+  @Get('finance/search')
+  getFinanceSearch(@CurrentUser() user: JwtPayload) {
+    return this.financeNotifications.getSearchIndex(user);
+  }
+
+  @Patch('finance/notifications/read')
+  markFinanceNotificationsRead(@CurrentUser() user: JwtPayload) {
+    return this.financeNotifications.markAllRead(user);
+  }
+
+  @Patch('finance/notifications/:id/read')
+  markFinanceNotificationRead(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.financeNotifications.markRead(user, id);
+  }
+
+  @Delete('finance/notifications/:id')
+  dismissFinanceNotification(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.financeNotifications.dismiss(user, id);
   }
 
   // ─── Contracts CRUD extensions ──────────────────────────────

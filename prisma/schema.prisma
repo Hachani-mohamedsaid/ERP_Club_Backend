@@ -154,8 +154,13 @@ model ClubNotification {
   type           NotifType    @default(INFO)
   level          NotifLevel   @default(INFO)
   isRead         Boolean      @default(false)
+  sourceKey      String?
+  path           String?
+  iconKey        String?
   createdAt      DateTime     @default(now())
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, sourceKey])
 }
 
 model ClubAuditLog {
