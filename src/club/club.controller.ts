@@ -703,9 +703,9 @@ export class ClubController {
     return this.club.deleteFinanceEntry(user, id);
   }
 
-  @Post('finance/seed')
-  seedFinance(@CurrentUser() user: JwtPayload) {
-    return this.club.seedFinanceDataIfEmpty(user);
+  @Post('finance/purge-demo')
+  purgeFinanceDemo(@CurrentUser() user: JwtPayload) {
+    return this.club.purgeFinanceDemoData(user);
   }
 
   @Get('finance/report')

@@ -1771,18 +1771,10 @@ export class ClubService {
   // ─── Transfers ───────────────────────────────────────────────────
   async getTransfers(user: JwtPayload) {
     const organizationId = this.orgId(user);
-    const existing = await this.prisma.playerTransfer.findMany({
+    return this.prisma.playerTransfer.findMany({
       where: { organizationId },
       orderBy: { createdAt: 'desc' },
     });
-    if (existing.length === 0) {
-      await this.seedTransfers(organizationId, user.fullName);
-      return this.prisma.playerTransfer.findMany({
-        where: { organizationId },
-        orderBy: { createdAt: 'desc' },
-      });
-    }
-    return existing;
   }
 
   async createTransfer(user: JwtPayload, data: Record<string, unknown>) {
@@ -1804,23 +1796,6 @@ export class ClubService {
     const organizationId = this.orgId(user);
     await this.prisma.playerTransfer.deleteMany({ where: { id, organizationId } });
     return { message: 'Transfert supprimé' };
-  }
-
-  private async seedTransfers(organizationId: string, adminName: string) {
-    const players = await this.prisma.clubPlayer.findMany({ where: { organizationId }, take: 6 });
-    if (players.length === 0) return;
-    const clubs = ['CS Sfaxien', 'US Monastir', 'JS Kairouan', 'Espérance ST', 'Al-Ahli'];
-    const statuses = ['Négociation', 'Offre reçue', 'Scouting', 'Intérêt'];
-    const transfers = players.slice(0, 4).map((p, i) => ({
-      organizationId,
-      playerName: p.fullName,
-      transferType: i < 2 ? 'Sortant' : i === 2 ? 'Entrant' : 'Rumeur',
-      club: clubs[i % clubs.length],
-      value: `${(0.5 + Math.random() * 3).toFixed(1)}M €`,
-      status: statuses[i % statuses.length],
-      probability: Math.round(20 + Math.random() * 70),
-    }));
-    await this.prisma.playerTransfer.createMany({ data: transfers });
   }
 
   // ─── Chemistry ───────────────────────────────────────────────────
@@ -1927,15 +1902,10 @@ export class ClubService {
   // ─── Sponsors ───────────────────────────────────────────────────
   async listSponsors(user: JwtPayload) {
     const organizationId = this.orgId(user);
-    const sponsors = await this.prisma.clubSponsor.findMany({
+    return this.prisma.clubSponsor.findMany({
       where: { organizationId },
       orderBy: { montant: 'desc' },
     });
-    if (sponsors.length === 0) {
-      await this.seedSponsors(organizationId);
-      return this.prisma.clubSponsor.findMany({ where: { organizationId }, orderBy: { montant: 'desc' } });
-    }
-    return sponsors;
   }
 
   async createSponsor(user: JwtPayload, data: Record<string, unknown>) {
@@ -1986,34 +1956,71 @@ export class ClubService {
     return { success: true };
   }
 
-  private async seedSponsors(organizationId: string) {
-    const now = new Date();
-    const nextYear = new Date(now.getFullYear() + 1, now.getMonth(), 1);
-    const nextTwoYears = new Date(now.getFullYear() + 2, now.getMonth(), 1);
-    const lastMonth = new Date(now.getFullYear() - 1, now.getMonth(), 1);
-    await this.prisma.clubSponsor.createMany({
-      data: [
-        { organizationId, nom: 'Sponsor Principal', logo: '🏆', secteur: 'Équipement', montant: 450000, startDate: lastMonth, endDate: nextTwoYears, renewalProbability: 90, status: 'Actif', contact: 'Responsable commercial', notes: 'Partenaire équipementier principal' },
-        { organizationId, nom: 'Sponsor Maillot', logo: '✈️', secteur: 'Services', montant: 350000, startDate: lastMonth, endDate: nextYear, renewalProbability: 75, status: 'Actif', contact: 'Directeur marketing', notes: 'Sponsor maillot domicile' },
-        { organizationId, nom: 'Partenaire Télécom', logo: '📡', secteur: 'Télécom', montant: 280000, startDate: lastMonth, endDate: new Date(now.getFullYear(), now.getMonth() + 2, 1), renewalProbability: 55, status: 'Expire bientot', contact: 'Chef de partenariats', notes: 'À renouveler' },
-        { organizationId, nom: 'Partenaire Financier', logo: '🏦', secteur: 'Finance', montant: 150000, startDate: new Date(now.getFullYear() - 2, 0, 1), endDate: lastMonth, renewalProbability: 20, status: 'Expire', contact: 'Directeur régional', notes: 'Négociations en cours' },
-      ],
-      skipDuplicates: true,
-    });
-  }
+  // ─── Finance demo cleanup (removes auto-seeded rows, keeps user-created data) ─
+  async purgeFinanceDemoData(user: JwtPayload) {
+    const organizationId = this.orgId(user);
 
-  // ─── Invoices ────────────────────────────────────────────────────
+    const demoSponsors = [
+      'Sponsor Principal',
+      'Sponsor Maillot',
+      'Partenaire Télécom',
+      'Partenaire Financier',
+    ];
+    const demoContracts = [
+      'Joueur Attaquant',
+      'Joueur Défenseur',
+      'Milieu de terrain',
+      'Gardien de but',
+      'Coach Principal',
+    ];
+    const demoInvoiceRefs = ['FAC-001', 'FAC-002', 'FAC-003', 'FAC-004', 'FAC-005'];
+
+    const [sponsors, invoices, contracts, entries] = await Promise.all([
+      this.prisma.clubSponsor.deleteMany({
+        where: { organizationId, nom: { in: demoSponsors } },
+      }),
+      this.prisma.clubInvoice.deleteMany({
+        where: { organizationId, reference: { in: demoInvoiceRefs } },
+      }),
+      this.prisma.clubContract.deleteMany({
+        where: { organizationId, holderName: { in: demoContracts } },
+      }),
+      this.prisma.clubFinanceEntry.findMany({ where: { organizationId } }),
+    ]);
+
+    const demoEntryIds = entries
+      .filter(
+        (e) =>
+          /^(Droits TV|Billetterie|Salaires|Équipements) —/.test(e.label) ||
+          ['Sponsor principal — Q2', 'Transfert entrant', 'Transfert sortant'].includes(
+            e.label,
+          ),
+      )
+      .map((e) => e.id);
+
+    const financeEntries =
+      demoEntryIds.length > 0
+        ? await this.prisma.clubFinanceEntry.deleteMany({
+            where: { id: { in: demoEntryIds } },
+          })
+        : { count: 0 };
+
+    return {
+      purged: true,
+      removed: {
+        sponsors: sponsors.count,
+        invoices: invoices.count,
+        contracts: contracts.count,
+        financeEntries: financeEntries.count,
+      },
+    };
+  }
   async listInvoices(user: JwtPayload) {
     const organizationId = this.orgId(user);
-    const invoices = await this.prisma.clubInvoice.findMany({
+    return this.prisma.clubInvoice.findMany({
       where: { organizationId },
       orderBy: { invoiceDate: 'desc' },
     });
-    if (invoices.length === 0) {
-      await this.seedInvoices(organizationId);
-      return this.prisma.clubInvoice.findMany({ where: { organizationId }, orderBy: { invoiceDate: 'desc' } });
-    }
-    return invoices;
   }
 
   async createInvoice(user: JwtPayload, data: Record<string, unknown>) {
@@ -2064,62 +2071,6 @@ export class ClubService {
     const invoice = await this.prisma.clubInvoice.findFirst({ where: { id, organizationId } });
     if (!invoice) throw new NotFoundException('Facture introuvable.');
     return this.prisma.clubInvoice.update({ where: { id }, data: { status: 'Payée' } });
-  }
-
-  private async seedInvoices(organizationId: string) {
-    const now = new Date();
-    await this.prisma.clubInvoice.createMany({
-      data: [
-        { organizationId, reference: 'FAC-001', fournisseur: 'Équipement Sport', invoiceType: 'Équipement', montant: 15000, invoiceDate: new Date(now.getFullYear(), now.getMonth(), 1), status: 'Payée', description: 'Matériel sportif saison' },
-        { organizationId, reference: 'FAC-002', fournisseur: 'Maintenance Stade', invoiceType: 'Infrastructure', montant: 8500, invoiceDate: new Date(now.getFullYear(), now.getMonth(), 5), status: 'Payée', description: 'Entretien terrain' },
-        { organizationId, reference: 'FAC-003', fournisseur: 'Transport Club', invoiceType: 'Transport', montant: 12000, invoiceDate: new Date(now.getFullYear(), now.getMonth(), 10), dueDate: new Date(now.getFullYear(), now.getMonth() + 1, 10), status: 'En attente', description: 'Déplacements matchs' },
-        { organizationId, reference: 'FAC-004', fournisseur: 'Assurance Joueurs', invoiceType: 'Fournisseur', montant: 25000, invoiceDate: new Date(now.getFullYear(), now.getMonth() - 1, 15), dueDate: new Date(now.getFullYear(), now.getMonth(), 15), status: 'Retard', description: 'Couverture accidents sportifs' },
-        { organizationId, reference: 'FAC-005', fournisseur: 'Fournitures Médicales', invoiceType: 'Médical', montant: 6500, invoiceDate: new Date(now.getFullYear(), now.getMonth(), 12), dueDate: new Date(now.getFullYear(), now.getMonth() + 1, 12), status: 'En attente', description: 'Matériel infirmerie' },
-      ],
-      skipDuplicates: true,
-    });
-  }
-
-  // ─── Finance seeding check ───────────────────────────────────────
-  async seedFinanceDataIfEmpty(user: JwtPayload) {
-    const organizationId = this.orgId(user);
-    const count = await this.prisma.clubFinanceEntry.count({ where: { organizationId } });
-    if (count > 0) return { seeded: false };
-    const now = new Date();
-    const monthLabels = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'];
-    const entries: {
-      organizationId: string; label: string; amount: number;
-      type: 'REVENUE' | 'EXPENSE'; category: string; entryDate: Date;
-    }[] = [];
-    for (let m = 5; m >= 0; m--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - m, 15);
-      const monthName = monthLabels[d.getMonth()];
-      entries.push(
-        { organizationId, label: `Droits TV — ${monthName}`, amount: 120000, type: 'REVENUE', category: 'Médias', entryDate: new Date(d.getFullYear(), d.getMonth(), 5) },
-        { organizationId, label: `Billetterie — ${monthName}`, amount: 35000 + Math.floor(Math.random() * 20000), type: 'REVENUE', category: 'Billetterie', entryDate: new Date(d.getFullYear(), d.getMonth(), 10) },
-        { organizationId, label: `Salaires — ${monthName}`, amount: 180000 + Math.floor(Math.random() * 30000), type: 'EXPENSE', category: 'Salaires', entryDate: new Date(d.getFullYear(), d.getMonth(), 28) },
-        { organizationId, label: `Équipements — ${monthName}`, amount: 15000 + Math.floor(Math.random() * 10000), type: 'EXPENSE', category: 'Équipements', entryDate: new Date(d.getFullYear(), d.getMonth(), 15) },
-      );
-    }
-    entries.push(
-      { organizationId, label: 'Sponsor principal — Q2', amount: 250000, type: 'REVENUE', category: 'Sponsoring', entryDate: new Date(now.getFullYear(), now.getMonth(), 1) },
-      { organizationId, label: 'Transfert entrant', amount: 350000, type: 'REVENUE', category: 'Transferts', entryDate: new Date(now.getFullYear(), now.getMonth() - 2, 20) },
-      { organizationId, label: 'Transfert sortant', amount: 200000, type: 'EXPENSE', category: 'Transferts', entryDate: new Date(now.getFullYear(), now.getMonth() - 1, 10) },
-    );
-    await this.prisma.clubFinanceEntry.createMany({ data: entries });
-    const contractCount = await this.prisma.clubContract.count({ where: { organizationId } });
-    if (contractCount === 0) {
-      await this.prisma.clubContract.createMany({
-        data: [
-          { organizationId, holderName: 'Joueur Attaquant', startDate: new Date('2023-01-01'), endDate: new Date('2026-06-30'), salaryMonthly: 85000, bonus: 12000, consumedPct: 90 },
-          { organizationId, holderName: 'Joueur Défenseur', startDate: new Date('2022-03-15'), endDate: new Date('2026-12-31'), salaryMonthly: 75000, bonus: 10000, consumedPct: 65 },
-          { organizationId, holderName: 'Milieu de terrain', startDate: new Date('2023-07-01'), endDate: new Date('2027-05-31'), salaryMonthly: 68000, bonus: 8000, consumedPct: 35 },
-          { organizationId, holderName: 'Gardien de but', startDate: new Date('2023-09-01'), endDate: new Date('2026-08-31'), salaryMonthly: 55000, bonus: 6000, consumedPct: 75 },
-          { organizationId, holderName: 'Coach Principal', startDate: new Date('2024-01-01'), endDate: new Date('2027-06-30'), salaryMonthly: 65000, bonus: 15000, consumedPct: 50 },
-        ],
-      });
-    }
-    return { seeded: true };
   }
 
   // ─── Finance Report ──────────────────────────────────────────────
