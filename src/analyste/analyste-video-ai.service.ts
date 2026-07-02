@@ -424,6 +424,8 @@ Réponds UNIQUEMENT en JSON valide:
       videoPredictions: this.mapVideoPredictions(vision, dto, timeline),
     };
   }
+
+  async processVideo(_user: JwtPayload, dto: ProcessVideoDto): Promise<VideoAnalysisAiResult> {
     const started = Date.now();
 
     if (!dto.playerName?.trim()) throw new BadRequestException('Nom du joueur requis.');
