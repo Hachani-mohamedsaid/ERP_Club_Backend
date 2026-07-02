@@ -91,6 +91,10 @@ export class PoseSummaryDto {
   @IsArray()
   @IsString({ each: true })
   legInsights?: string[];
+
+  @IsOptional()
+  @IsString()
+  model?: string;
 }
 
 export class ProcessVideoDto {
