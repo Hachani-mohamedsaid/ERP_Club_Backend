@@ -10,6 +10,9 @@ async function bootstrap() {
   runDatabaseBootstrap();
 
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // Frames vidéo en base64 (analyse IA) — défaut Express 100kb trop petit
+  app.useBodyParser('json', { limit: '25mb' });
+  app.useBodyParser('urlencoded', { limit: '25mb', extended: true });
   app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads/' });
 
   const frontendOrigins = (process.env.FRONTEND_URL ?? 'http://localhost:5173')
