@@ -16,6 +16,11 @@ export class VideoFrameDto {
 
   @IsString()
   imageBase64!: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  motionScore?: number;
 }
 
 export class ProcessVideoDto {
