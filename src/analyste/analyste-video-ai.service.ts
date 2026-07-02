@@ -427,6 +427,7 @@ export class AnalysteVideoAiService {
 Analyse CHAQUE frame avec précision millimétrique visuelle (posture, appuis, foulée, tronc, bras, regard, balle).
 Vidéo: ${this.fmtTime(dto.durationSec)} · ${dto.frames.length} frames · Joueur: ${dto.playerName} · Focus: ${dto.focus ?? 'analyse complète biomécanique'}.
 ${dto.frames.map((f, i) => `Frame ${i + 1}: t=${this.fmtTime(f.timeSec)} motion=${f.motionScore ?? '?'}`).join(' · ')}
+${dto.poseSummary ? `\nDONNÉES SQUELETTE MediaPipe (ODIN Precision Engine):\n${JSON.stringify(dto.poseSummary, null, 2)}\n${JSON.stringify(dto.poseFrames ?? [], null, 2)}\nUtilise ces angles genoux/hanches RÉELS pour enrichir movementFrames et biomechanics.` : ''}
 
 Réponds UNIQUEMENT en JSON valide:
 {
