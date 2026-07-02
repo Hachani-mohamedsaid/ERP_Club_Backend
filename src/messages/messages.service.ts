@@ -1,17 +1,31 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { randomUUID } from 'crypto';
+import { mkdir, writeFile } from 'fs/promises';
+import { extname, join } from 'path';
 import { JwtPayload } from '../auth/jwt-payload.interface';
 import { clubRoleToLabel } from '../club/permissions-seed';
+import { ImgbbService } from '../imgbb/imgbb.service';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  encodeAttachmentMessage,
+  formatMessagePreview,
+} from './message-attachment.util';
 
 export type MessageStatus = 'sent' | 'delivered' | 'read';
 
 @Injectable()
 export class MessagesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly imgbb: ImgbbService,
+    private readonly config: ConfigService,
+  ) {}
 
   private orgId(user: JwtPayload) {
     if (!user.organizationId) {
@@ -126,7 +140,7 @@ export class MessagesService {
       role: clubRoleToLabel(m.clubRole),
       avatar: this.initials(m.fullName),
       conversationId: conv?.id ?? null,
-      preview: last?.body ?? '',
+      preview: last ? formatMessagePreview(last.body) : '',
       time: last ? this.formatTime(last.createdAt) : '',
       unread,
       online: false,
@@ -438,5 +452,90 @@ export class MessagesService {
     });
 
     return { marked: unreadMessages.length };
+  }
+
+  async markConversationUnread(user: JwtPayload, conversationId: string) {
+    const organizationId = this.orgId(user);
+    const myMemberId = await this.resolveMemberId(user);
+
+    const conversation = await this.prisma.clubDirectConversation.findFirst({
+      where: {
+        id: conversationId,
+        organizationId,
+        OR: [{ participantAId: myMemberId }, { participantBId: myMemberId }],
+      },
+    });
+    if (!conversation) throw new NotFoundException('Conversation introuvable.');
+
+    const peerMemberId =
+      conversation.participantAId === myMemberId
+        ? conversation.participantBId
+        : conversation.participantAId;
+
+    const peerMessages = await this.prisma.clubDirectMessage.findMany({
+      where: { conversationId, senderMemberId: peerMemberId },
+      select: { id: true },
+    });
+    if (peerMessages.length === 0) return { marked: 0 };
+
+    await this.prisma.clubDirectMessageRead.deleteMany({
+      where: {
+        memberId: myMemberId,
+        messageId: { in: peerMessages.map((m) => m.id) },
+      },
+    });
+
+    return { marked: peerMessages.length };
+  }
+
+  private uploadsRoot() {
+    return join(process.cwd(), 'uploads', 'messages');
+  }
+
+  async uploadAttachment(user: JwtPayload, file: Express.Multer.File) {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('Fichier requis.');
+    }
+
+    const maxSize = 5 * 1024 * 1024;
+    if (file.size > maxSize) {
+      throw new BadRequestException('Fichier trop volumineux (max 5 Mo).');
+    }
+
+    const isImage = (file.mimetype || '').startsWith('image/');
+    if (!isImage) {
+      throw new BadRequestException('Seules les images sont supportées pour le moment.');
+    }
+
+    const organizationId = this.orgId(user);
+    const sizeKb = Math.round(file.size / 1024);
+    let url: string;
+
+    const apiKey = this.config.get<string>('IMGBB_API_KEY');
+    if (apiKey) {
+      url = await this.imgbb.uploadImage(file);
+    } else {
+      const ext = extname(file.originalname) || '.jpg';
+      const safeName = `${randomUUID()}${ext}`;
+      const dir = join(this.uploadsRoot(), organizationId);
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, safeName), file.buffer);
+      const base =
+        this.config.get<string>('API_PUBLIC_URL') ??
+        `http://localhost:${this.config.get<string>('PORT') ?? 3000}`;
+      url = `${base.replace(/\/$/, '')}/uploads/messages/${organizationId}/${safeName}`;
+    }
+
+    const attachment = {
+      type: 'image' as const,
+      url,
+      name: file.originalname,
+      sizeKb,
+    };
+
+    return {
+      ...attachment,
+      body: encodeAttachmentMessage(attachment),
+    };
   }
 }
