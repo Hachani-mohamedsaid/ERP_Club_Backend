@@ -6,7 +6,7 @@ import { AnalysteService } from './analyste.service';
 @Module({
   imports: [ClubModule],
   controllers: [AnalysteController],
-  providers: [AnalysteService],
+  providers: [AnalysteService, AnalysteVideoAiService],
   exports: [AnalysteService],
 })
 export class AnalysteModule {}
