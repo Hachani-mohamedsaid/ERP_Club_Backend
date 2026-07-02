@@ -7,8 +7,11 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { JwtPayload } from '../auth/jwt-payload.interface';
@@ -63,12 +66,33 @@ export class MessagesController {
     return result;
   }
 
+  @Post('upload')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 5 * 1024 * 1024 },
+    }),
+  )
+  uploadAttachment(
+    @CurrentUser() user: JwtPayload,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.messages.uploadAttachment(user, file);
+  }
+
   @Patch('conversations/:conversationId/read')
   markRead(
     @CurrentUser() user: JwtPayload,
     @Param('conversationId') conversationId: string,
   ) {
     return this.messages.markConversationRead(user, conversationId);
+  }
+
+  @Patch('conversations/:conversationId/unread')
+  markUnread(
+    @CurrentUser() user: JwtPayload,
+    @Param('conversationId') conversationId: string,
+  ) {
+    return this.messages.markConversationUnread(user, conversationId);
   }
 
   @Delete('conversations/:conversationId')
