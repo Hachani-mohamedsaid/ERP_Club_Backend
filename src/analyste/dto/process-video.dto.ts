@@ -118,7 +118,7 @@ export class ProcessVideoDto {
   fileName?: string;
 
   @IsArray()
-  @ArrayMaxSize(12)
+  @ArrayMaxSize(16)
   @ValidateNested({ each: true })
   @Type(() => VideoFrameDto)
   frames!: VideoFrameDto[];
@@ -130,7 +130,7 @@ export class ProcessVideoDto {
 
   @IsOptional()
   @IsArray()
-  @ArrayMaxSize(12)
+  @ArrayMaxSize(16)
   @ValidateNested({ each: true })
   @Type(() => PoseFrameDto)
   poseFrames?: PoseFrameDto[];

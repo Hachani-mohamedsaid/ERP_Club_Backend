@@ -135,8 +135,14 @@ export class AnalysteVideoAiService {
       process.env.ANTHROPIC_API_KEY?.trim() ||
       process.env.CLAUDE_API_KEY?.trim() ||
       String(extended.claudeApiKey ?? '').trim();
-    const openaiModel = String(extended.aiModel ?? 'gpt-4o-mini');
-    const claudeModel = String(extended.claudeModel ?? 'claude-sonnet-4-20250514');
+    const openaiModel =
+      process.env.OPENAI_VIDEO_MODEL?.trim()
+      || String(extended.aiModel ?? '').trim()
+      || 'gpt-4o';
+    const claudeModel =
+      process.env.CLAUDE_VIDEO_MODEL?.trim()
+      || String(extended.claudeModel ?? '').trim()
+      || 'claude-opus-4-20250514';
     return { openaiKey, claudeKey, openaiModel, claudeModel };
   }
 
@@ -466,7 +472,7 @@ IMPORTANT: movementFrames doit avoir UNE entrée par frame envoyée, avec biomec
       },
     ];
 
-    for (const frame of dto.frames.slice(0, 10)) {
+    for (const frame of dto.frames.slice(0, 16)) {
       const b64 = frame.imageBase64.replace(/^data:image\/\w+;base64,/, '');
       content.push({
         type: 'image_url',
@@ -475,13 +481,17 @@ IMPORTANT: movementFrames doit avoir UNE entrée par frame envoyée, avec biomec
       content.push({ type: 'text', text: `Frame à ${this.fmtTime(frame.timeSec)} (${frame.timeSec}s)` });
     }
 
+    const visionModel =
+      process.env.OPENAI_VIDEO_MODEL?.trim()
+      || (model.includes('gpt-4') ? model : 'gpt-4o');
+
     const res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
-        model: model.includes('gpt-4o') ? model : 'gpt-4o-mini',
-        temperature: 0.25,
-        max_tokens: 4096,
+        model: visionModel.includes('gpt-4') ? visionModel : 'gpt-4o',
+        temperature: 0.12,
+        max_tokens: 8192,
         messages: [{ role: 'user', content }],
       }),
     });
@@ -512,8 +522,8 @@ IMPORTANT: movementFrames doit avoir UNE entrée par frame envoyée, avec biomec
       },
       body: JSON.stringify({
         model,
-        max_tokens: 2800,
-        temperature: 0.25,
+        max_tokens: 4096,
+        temperature: 0.2,
         system:
           'Tu es entraineur analyste ODIN ERP — niveau staff pro + biomécanicien. Rédige un rapport vidéo ultra-détaillé en français: analyse frame-par-frame des mouvements, foulée, appuis, posture, technique balle, charge mécanique, risques blessure, recommandations micro-ajustements. Structure: 1) Contexte 2) Biomécanique séquence 3) Vitesse/accélérations 4) Technique 5) Tactique 6) Plan séance. Ton scientifique mais lisible, data-driven.',
         messages: [
@@ -622,7 +632,7 @@ IMPORTANT: movementFrames doit avoir UNE entrée par frame envoyée, avec biomec
 
     if (!dto.playerName?.trim()) throw new BadRequestException('Nom du joueur requis.');
     if (!dto.frames?.length) throw new BadRequestException('Au moins 1 frame requise.');
-    if (dto.frames.length > 12) throw new BadRequestException('Maximum 12 frames par analyse.');
+    if (dto.frames.length > 16) throw new BadRequestException('Maximum 16 frames par analyse.');
 
     const { openaiKey, claudeKey, openaiModel, claudeModel } = await this.resolveKeys();
 
