@@ -39,7 +39,11 @@ export class MessagesController {
   ) {
     const thread = await this.messages.getThread(user, peerMemberId);
     const myMemberId = await this.messages.resolveMemberId(user);
-    if (user.organizationId && peerMemberId !== myMemberId) {
+    if (
+      user.organizationId &&
+      peerMemberId !== myMemberId &&
+      thread.conversationId
+    ) {
       this.gateway.emitMessageRead(user.organizationId, peerMemberId, {
         conversationId: thread.conversationId,
         readerMemberId: myMemberId,

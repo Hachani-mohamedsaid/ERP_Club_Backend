@@ -570,7 +570,10 @@ Utilise les données réelles du snapshot. Max 120 mots.`,
     if (!player) throw new NotFoundException('Joueur introuvable.');
 
     const injuries = await this.prisma.clubInjury.findMany({
-      where: { organizationId: player.organizationId, playerName: player.fullName },
+      where: {
+        organizationId: player.organizationId,
+        playerName: { equals: player.fullName, mode: 'insensitive' },
+      },
       orderBy: { createdAt: 'desc' },
     });
 
@@ -581,6 +584,7 @@ Utilise les données réelles du snapshot. Max 120 mots.`,
       returnDate: i.returnDate?.toLocaleDateString('fr-FR') ?? '—',
       riskScore: i.riskScore,
       date: i.createdAt.toLocaleDateString('fr-FR'),
+      createdAt: i.createdAt.toISOString(),
     }));
   }
 
