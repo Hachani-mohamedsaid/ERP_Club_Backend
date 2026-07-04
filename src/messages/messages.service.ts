@@ -139,7 +139,7 @@ export class MessagesService {
       name: m.fullName,
       role: clubRoleToLabel(m.clubRole),
       avatar: this.initials(m.fullName),
-      conversationId: conv?.id ?? null,
+      conversationId: last ? (conv?.id ?? null) : null,
       preview: last ? formatMessagePreview(last.body) : '',
       time: last ? this.formatTime(last.createdAt) : '',
       unread,
@@ -157,6 +157,7 @@ export class MessagesService {
       where: {
         organizationId,
         OR: [{ participantAId: myMemberId }, { participantBId: myMemberId }],
+        messages: { some: {} },
       },
       include: {
         messages: { orderBy: { createdAt: 'desc' }, take: 1 },
@@ -223,7 +224,10 @@ export class MessagesService {
     });
 
     const withMessages = items
-      .filter((i) => i.conversationId)
+      .filter((i) => {
+        const conv = convByPeer.get(i.memberId);
+        return conv && conv.messages.length > 0;
+      })
       .sort((a, b) => {
         const ca = convByPeer.get(a.memberId);
         const cb = convByPeer.get(b.memberId);
@@ -233,7 +237,10 @@ export class MessagesService {
         );
       });
     const withoutMessages = items
-      .filter((i) => !i.conversationId)
+      .filter((i) => {
+        const conv = convByPeer.get(i.memberId);
+        return !conv || conv.messages.length === 0;
+      })
       .sort((a, b) => a.name.localeCompare(b.name, 'fr'));
 
     return {
@@ -301,24 +308,28 @@ export class MessagesService {
           participantBId,
         },
       },
+      include: {
+        _count: { select: { messages: true } },
+      },
     });
 
-    if (!conversation) {
-      conversation = await this.prisma.clubDirectConversation.create({
-        data: {
-          organizationId,
-          participantAId,
-          participantBId,
-        },
+    if (conversation && conversation._count.messages === 0) {
+      await this.prisma.clubDirectConversation.delete({
+        where: { id: conversation.id },
       });
+      conversation = null;
     }
 
-    const messages = await this.prisma.clubDirectMessage.findMany({
-      where: { conversationId: conversation.id },
-      orderBy: { createdAt: 'asc' },
-    });
+    const messages = conversation
+      ? await this.prisma.clubDirectMessage.findMany({
+          where: { conversationId: conversation.id },
+          orderBy: { createdAt: 'asc' },
+        })
+      : [];
 
-    await this.markConversationRead(user, conversation.id);
+    if (conversation && messages.length > 0) {
+      await this.markConversationRead(user, conversation.id);
+    }
 
     const formatted = await Promise.all(
       messages.map(async (msg) => ({
@@ -339,7 +350,7 @@ export class MessagesService {
     );
 
     return {
-      conversationId: conversation.id,
+      conversationId: conversation?.id ?? null,
       peer: {
         memberId: peer.id,
         name: peer.fullName,
