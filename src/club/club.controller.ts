@@ -229,6 +229,11 @@ export class ClubController {
     return this.club.createCalendarEvent(user, body);
   }
 
+  @Get('medical/dashboard')
+  getMedicalDashboard(@CurrentUser() user: JwtPayload) {
+    return this.club.getMedicalStats(user);
+  }
+
   @Get('injuries')
   listInjuries(@CurrentUser() user: JwtPayload) {
     return this.club.listInjuries(user);
@@ -520,7 +525,6 @@ export class ClubController {
   }
 
   // ─── Player Photo ────────────────────────────────────────────────
-
   @Patch('players/:id/photo')
   updatePlayerPhoto(
     @CurrentUser() user: JwtPayload,
@@ -531,7 +535,6 @@ export class ClubController {
   }
 
   // ─── Player Stats ─────────────────────────────────────────────────
-
   @Get('players/:id/stats')
   getPlayerStats(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.club.getPlayerStats(user, id);
@@ -546,37 +549,7 @@ export class ClubController {
     return this.club.updatePlayerStats(user, id, body);
   }
 
-  // ─── Player Physical Profile ────────────────────────────────────
-
-  @Patch('players/:id/physical')
-  updatePlayerPhysical(
-    @CurrentUser() user: JwtPayload,
-    @Param('id') id: string,
-    @Body() body: Record<string, unknown>,
-  ) {
-    return this.club.updatePlayerPhysical(user, id, body);
-  }
-
-  // ─── Player Appointment ─────────────────────────────────────────
-
-  @Post('players/:id/appointment')
-  bookAppointment(
-    @CurrentUser() user: JwtPayload,
-    @Param('id') id: string,
-    @Body() body: Record<string, unknown>,
-  ) {
-    return this.club.bookPlayerAppointment(user, id, body);
-  }
-
-  // ─── Player Contract ───────────────────────────────────────────
-
-  @Get('players/:id/contract')
-  getPlayerContract(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.club.getPlayerContract(user, id);
-  }
-
-  // ─── Match Stats ──────────────────────────────────────────────
-
+  // ─── Match Stats ──────────────────────────────────────────────────
   @Get('players/:id/match-stats')
   getMatchStats(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.club.getMatchStats(user, id);
@@ -593,8 +566,7 @@ export class ClubController {
     return this.club.createMatchStat(user, id, body);
   }
 
-  // ─── Awards ──────────────────────────────────────────────────
-
+  // ─── Awards ───────────────────────────────────────────────────────
   @Get('players/:id/awards')
   getAwards(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.club.getAwards(user, id);
@@ -618,8 +590,7 @@ export class ClubController {
     return this.club.deleteAward(user, id);
   }
 
-  // ─── Documents ──────────────────────────────────────────────
-
+  // ─── Documents ────────────────────────────────────────────────────
   @Get('players/:id/documents')
   getDocuments(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.club.getDocuments(user, id);
@@ -644,8 +615,7 @@ export class ClubController {
     return this.club.deleteDocument(user, id);
   }
 
-  // ─── Transfers ──────────────────────────────────────────────
-
+  // ─── Transfers ────────────────────────────────────────────────────
   @Get('transfers')
   getTransfers(@CurrentUser() user: JwtPayload) {
     return this.club.getTransfers(user);
@@ -665,8 +635,7 @@ export class ClubController {
     return this.club.deleteTransfer(user, id);
   }
 
-  // ─── Chemistry ──────────────────────────────────────────────
-
+  // ─── Chemistry ────────────────────────────────────────────────────
   @Get('chemistry')
   getChemistry(@CurrentUser() user: JwtPayload) {
     return this.club.getChemistry(user);
@@ -883,5 +852,58 @@ export class ClubController {
   @Post('ai/chat')
   chatClubAi(@CurrentUser() user: JwtPayload, @Body() dto: ClubAiChatDto) {
     return this.club.chatClubAi(user, dto);
+  }
+
+  // ─── MATCHES ─────────────────────────
+
+  @Get('matches')
+  @UseGuards(JwtAuthGuard)
+  getMatches(@CurrentUser() user: JwtPayload) {
+    return this.club.getMatches(user);
+  }
+
+  @Post('matches')
+  @UseGuards(JwtAuthGuard)
+  createMatch(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.createMatch(user, body);
+  }
+
+  @Patch('matches/:id')
+  @UseGuards(JwtAuthGuard)
+  updateMatch(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.updateMatch(user, id, body);
+  }
+
+  @Delete('matches/:id')
+  @UseGuards(JwtAuthGuard)
+  deleteMatch(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.club.deleteMatch(user, id);
+  }
+
+  // ─── STANDING ────────────────────────
+
+  @Get('standing')
+  @UseGuards(JwtAuthGuard)
+  getStanding(@CurrentUser() user: JwtPayload) {
+    return this.club.getStanding(user);
+  }
+
+  @Patch('standing')
+  @UseGuards(JwtAuthGuard)
+  updateStanding(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.updateStanding(user, body);
   }
 }

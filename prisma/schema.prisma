@@ -45,6 +45,8 @@ model Organization {
   financeEntries   ClubFinanceEntry[]
   infrastructures  ClubInfrastructure[]
   injuries         ClubInjury[]
+  matches          ClubMatch[]
+  standing         ClubStanding?
   members          ClubMember[]
   notifications    ClubNotification[]
   permissions      ClubPermission[]
@@ -1021,4 +1023,40 @@ model ClubDirectMessageRead {
 
   @@unique([messageId, memberId])
   @@index([memberId])
+}
+
+model ClubMatch {
+  id                 String       @id @default(uuid())
+  organizationId     String
+  organization       Organization @relation(fields: [organizationId], references: [id])
+  opponent           String
+  competition        String       @default("Ligue 1")
+  matchDate          DateTime
+  homeAway           String       @default("D")
+  goalsFor           Int          @default(0)
+  goalsAgainst       Int          @default(0)
+  result             String       @default("N")
+  opponentFormation  String?
+  opponentStrengths  String?
+  opponentWeaknesses String?
+  notes              String?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+}
+
+model ClubStanding {
+  id             String       @id @default(uuid())
+  organizationId String       @unique
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  competition    String       @default("Ligue 1")
+  position       Int          @default(1)
+  points         Int          @default(0)
+  played         Int          @default(0)
+  won            Int          @default(0)
+  drawn          Int          @default(0)
+  lost           Int          @default(0)
+  goalsFor       Int          @default(0)
+  goalsAgainst   Int          @default(0)
+  form           String       @default("")
+  updatedAt      DateTime     @updatedAt
 }

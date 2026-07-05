@@ -760,15 +760,6 @@ export class ClubService {
     marketValue: string;
     salaryMonthly: number;
     status: string;
-    radar?: unknown;
-    photoUrl?: string | null;
-    stats?: unknown;
-    height?: string | null;
-    weight?: string | null;
-    strongFoot?: string | null;
-    birthDate?: string | null;
-    jerseyNumber?: number | null;
-    nationality?: string | null;
   }) {
     const statusMap: Record<string, string> = {
       DISPONIBLE: 'Disponible',
@@ -776,30 +767,20 @@ export class ClubService {
       LIMITE: 'Limité',
       FIN_CONTRAT: 'Fin contrat',
     };
-    const defaultRadar = { speed: 70, shooting: 70, passing: 70, dribbling: 70, defending: 70, physical: 70, vision: 70 };
-    const dbRadar = (p.radar && typeof p.radar === 'object') ? p.radar as Record<string, number> : null;
     return {
       id: p.id,
       name: p.fullName,
       position: p.position,
-      positionFull: p.position,
       age: p.age,
       ovr: p.ovr,
       goals: p.goals ?? 0,
       marketValue: p.marketValue,
       contract: { salary: `${p.salaryMonthly.toLocaleString('fr-FR')} DT/mois` },
       availability: statusMap[p.status] ?? p.status,
-      radar: dbRadar ?? defaultRadar,
-      photoUrl: p.photoUrl ?? null,
-      stats: p.stats ?? null,
-      height: p.height ?? '',
-      weight: p.weight ?? '',
-      strongFoot: p.strongFoot ?? 'Droit',
-      birthDate: p.birthDate ?? '',
-      jerseyNumber: p.jerseyNumber ?? 0,
-      nationality: p.nationality ?? 'Tunisie',
+      radar: { pace: 70, shooting: 70, passing: 70, dribbling: 70, defending: 70, physical: 70 },
       performanceHistory: [],
       matches: [],
+      positionFull: p.position,
     };
   }
 
@@ -1195,25 +1176,45 @@ export class ClubService {
     });
   }
 
-  async bookPlayerAppointment(user: JwtPayload, playerId: string, data: Record<string, unknown>) {
+  // ─── Injuries ──────────────────────────────────────────────────
+  async getMedicalStats(user: JwtPayload) {
     const organizationId = this.orgId(user);
-    const player = await this.prisma.clubPlayer.findFirst({ where: { id: playerId, organizationId } });
-    const playerName = player?.fullName ?? 'Joueur';
-    const appointmentType = String(data.appointmentType ?? 'Bilan médical');
-    const requestedDate = data.requestedDate ? new Date(String(data.requestedDate)) : (() => { const d = new Date(); d.setDate(d.getDate() + 7); return d; })();
-    return this.prisma.clubCalendarEvent.create({
-      data: {
-        organizationId,
-        title: `${appointmentType} — ${playerName}`,
-        eventDate: requestedDate,
-        eventTime: String(data.requestedTime ?? '09:00'),
-        eventType: 'MEDICAL',
-        location: String(data.location ?? 'Infirmerie du club'),
+
+    const [injuries, players] = await Promise.all([
+      this.prisma.clubInjury.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.clubPlayer.findMany({
+        where: { organizationId },
+        select: { id: true, fullName: true, status: true },
+      }),
+    ]);
+
+    const injuredNames = new Set(injuries.map((i) => i.playerName));
+    const available = players.filter((p) => !injuredNames.has(p.fullName)).length;
+    const avgRisk = injuries.length
+      ? Math.round((injuries.reduce((s, i) => s + i.riskScore, 0) / injuries.length) * 10)
+      : 0;
+
+    return {
+      kpis: {
+        injured: injuredNames.size,
+        available,
+        avgRisk,
       },
-    });
+      injured: injuries.map((i) => ({
+        id: i.id,
+        name: i.playerName,
+        injury: i.injuryType,
+        bodyPart: i.bodyPart ?? '',
+        returnDate: i.returnDate?.toLocaleDateString('fr-FR') ?? '—',
+        riskIA: i.riskScore,
+        status: 'Traitement',
+      })),
+    };
   }
 
-  // ─── Injuries ──────────────────────────────────────────────────
   async listInjuries(user: JwtPayload) {
     const organizationId = this.orgId(user);
     const [injuries, playersCount] = await Promise.all([
@@ -1286,12 +1287,14 @@ export class ClubService {
     const updated = await this.prisma.clubInjury.update({
       where: { id },
       data: {
-        ...(data.injuryType != null ? { injuryType: String(data.injuryType) } : {}),
-        ...(data.bodyPart !== undefined ? { bodyPart: String(data.bodyPart) } : {}),
-        ...(data.returnDate !== undefined
-          ? { returnDate: data.returnDate ? new Date(String(data.returnDate)) : null }
-          : {}),
-        ...(data.riskScore !== undefined ? { riskScore: Number(data.riskScore) } : {}),
+        ...(data.injuryType !== undefined && {
+          injuryType: String(data.injuryType),
+        }),
+        ...(data.bodyPart !== undefined && { bodyPart: String(data.bodyPart) }),
+        ...(data.returnDate !== undefined && {
+          returnDate: data.returnDate ? new Date(String(data.returnDate)) : null,
+        }),
+        ...(data.riskScore !== undefined && { riskScore: Number(data.riskScore) }),
       },
     });
 
@@ -1440,24 +1443,12 @@ export class ClubService {
     if (!player) throw new NotFoundException('Joueur introuvable.');
 
     if (!player.stats) {
-      const org = await this.prisma.organization.findUnique({ where: { id: organizationId } });
-      const seeded = this.seedPlayerStats(player, org?.league ?? undefined);
+      const seeded = this.seedPlayerStats(player);
       await this.prisma.clubPlayer.update({
         where: { id: playerId },
         data: { stats: seeded as never },
       });
       return seeded;
-    }
-    // Patch existing stats: fix 'Liga 1' positionLabel with real league if org league differs
-    const statsObj = player.stats as Record<string, unknown>;
-    const hero = statsObj?.dashboardHero as Record<string, unknown> | undefined;
-    if (hero && hero.positionLabel === 'Liga 1') {
-      const org = await this.prisma.organization.findUnique({ where: { id: organizationId } });
-      if (org?.league && org.league !== 'Liga 1') {
-        const patched = { ...statsObj, dashboardHero: { ...hero, positionLabel: org.league } };
-        await this.prisma.clubPlayer.update({ where: { id: playerId }, data: { stats: patched as never } });
-        return patched;
-      }
     }
     return player.stats;
   }
@@ -1477,51 +1468,7 @@ export class ClubService {
     return merged;
   }
 
-  async updatePlayerPhysical(user: JwtPayload, playerId: string, data: Record<string, unknown>) {
-    const organizationId = this.orgId(user);
-    const player = await this.prisma.clubPlayer.findFirst({
-      where: { id: playerId, organizationId },
-    });
-    if (!player) throw new NotFoundException('Joueur introuvable.');
-    const allowed: Record<string, unknown> = {};
-    if (data.height !== undefined) allowed['height'] = String(data.height);
-    if (data.weight !== undefined) allowed['weight'] = String(data.weight);
-    if (data.strongFoot !== undefined) allowed['strongFoot'] = String(data.strongFoot);
-    if (data.birthDate !== undefined) allowed['birthDate'] = String(data.birthDate);
-    if (data.jerseyNumber !== undefined) allowed['jerseyNumber'] = Number(data.jerseyNumber);
-    if (data.nationality !== undefined) allowed['nationality'] = String(data.nationality);
-    const updated = await this.prisma.clubPlayer.update({
-      where: { id: playerId },
-      data: allowed as never,
-    });
-    return this.formatPlayer(updated);
-  }
-
-  async getPlayerContract(user: JwtPayload, playerId: string) {
-    const organizationId = this.orgId(user);
-    const player = await this.prisma.clubPlayer.findFirst({
-      where: { id: playerId, organizationId },
-    });
-    if (!player) throw new NotFoundException('Joueur introuvable.');
-    const contract = await this.prisma.clubContract.findFirst({
-      where: {
-        organizationId,
-        holderName: { contains: player.fullName, mode: 'insensitive' },
-      },
-      orderBy: { endDate: 'desc' },
-    });
-    if (!contract) return null;
-    return {
-      id: contract.id,
-      startDate: contract.startDate.toISOString().split('T')[0],
-      endDate: contract.endDate.toISOString().split('T')[0],
-      salary: `${contract.salaryMonthly.toLocaleString('fr-FR')} DT/mois`,
-      releaseClause: contract.releaseClause ?? '—',
-      consumedPct: contract.consumedPct,
-    };
-  }
-
-  private seedPlayerStats(player: { ovr: number; goals: number; fullName: string }, leagueName?: string) {
+  private seedPlayerStats(player: { ovr: number; goals: number; fullName: string }) {
     const ovr = player.ovr || 75;
     const base = Math.max(60, ovr - 10);
     const months = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin'];
@@ -1549,7 +1496,7 @@ export class ClubService {
         marketValue: `${(Math.random() * 2 + 0.5).toFixed(1)}M €`,
         coachRating: +(7 + Math.random() * 2).toFixed(1),
         positionRanking: Math.ceil(Math.random() * 5) + 1,
-        positionLabel: leagueName ?? 'Ligue 1',
+        positionLabel: 'Liga 1',
       },
       marketValueTrend: { change: `+${(Math.random() * 15 + 3).toFixed(0)}%` },
     };
@@ -1590,9 +1537,7 @@ export class ClubService {
         passAccuracy: Number(data.passAccuracy ?? 0),
         topSpeed: Number(data.topSpeed ?? 0),
         keyPasses: Number(data.keyPasses ?? 0),
-        yellowCards: Number(data.yellowCards ?? 0),
-        redCards: Number(data.redCards ?? 0),
-        heatmapData: (data.heatmapData ?? null) as never,
+        heatmapData: (data.heatmapData as never) ?? null,
       },
     });
   }
@@ -1619,8 +1564,6 @@ export class ClubService {
         passAccuracy: Math.round(72 + Math.random() * 20),
         topSpeed: +(30 + Math.random() * 5).toFixed(1),
         keyPasses: Math.round(Math.random() * 4),
-        yellowCards: Math.random() > 0.7 ? 1 : 0,
-        redCards: Math.random() > 0.95 ? 1 : 0,
         heatmapData: Prisma.JsonNull,
       };
     });
@@ -1630,33 +1573,16 @@ export class ClubService {
   // ─── Awards ──────────────────────────────────────────────────────
   async getAwards(user: JwtPayload, playerId: string) {
     const organizationId = this.orgId(user);
-    const org = await this.prisma.organization.findUnique({ where: { id: organizationId } });
-    const realClubName = org?.clubName ?? null;
-
     const existing = await this.prisma.playerAward.findMany({
       where: { organizationId, playerId },
       orderBy: { createdAt: 'desc' },
     });
     if (existing.length === 0) {
-      await this.seedAwards(organizationId, playerId, realClubName);
+      await this.seedAwards(organizationId, playerId);
       return this.prisma.playerAward.findMany({
         where: { organizationId, playerId },
         orderBy: { createdAt: 'desc' },
       });
-    }
-    // Patch any existing records that still have the old 'FC Carthage' placeholder
-    if (realClubName && realClubName !== 'FC Carthage') {
-      const stale = existing.filter((a) => a.club === 'FC Carthage');
-      if (stale.length > 0) {
-        await this.prisma.playerAward.updateMany({
-          where: { organizationId, playerId, club: 'FC Carthage' },
-          data: { club: realClubName },
-        });
-        return this.prisma.playerAward.findMany({
-          where: { organizationId, playerId },
-          orderBy: { createdAt: 'desc' },
-        });
-      }
     }
     return existing;
   }
@@ -1685,21 +1611,19 @@ export class ClubService {
     return { message: 'Award supprimé' };
   }
 
-  private async seedAwards(organizationId: string, playerId: string, clubName: string | null = null) {
-    const club = clubName ?? 'Mon Club';
-    const season = `${new Date().getFullYear() - 1}-${String(new Date().getFullYear()).slice(2)}`;
+  private async seedAwards(organizationId: string, playerId: string) {
     const awards = [
-      { title: 'Joueur du Mois', season: `Mai ${new Date().getFullYear()}`, icon: '🥇', color: '#d99a1f', awardType: 'award' },
-      { title: 'Meilleur Buteur', season, icon: '⚽', color: '#FF6B57', awardType: 'award' },
-      { title: 'Fair-Play Award', season: String(new Date().getFullYear() - 1), icon: '🤝', color: '#22C55E', awardType: 'award' },
+      { title: 'Joueur du Mois', season: 'Mai 2026', icon: '🥇', color: '#d99a1f', awardType: 'award' },
+      { title: 'Meilleur Buteur', season: 'Saison 2025-26', icon: '⚽', color: '#FF6B57', awardType: 'award' },
+      { title: 'Fair-Play Award', season: '2024-25', icon: '🤝', color: '#22C55E', awardType: 'award' },
     ];
     const trophies = [
-      { title: 'Champion Ligue 1', season: String(new Date().getFullYear() - 1), icon: '🏆', color: '#d99a1f', awardType: 'trophy', year: String(new Date().getFullYear() - 1), club },
-      { title: 'Coupe Nationale', season: String(new Date().getFullYear() - 2), icon: '🥈', color: '#9ca3af', awardType: 'trophy', year: String(new Date().getFullYear() - 2), club },
+      { title: 'Champion Liga 1', season: '2024-25', icon: '🏆', color: '#d99a1f', awardType: 'trophy', year: '2025', club: 'FC Carthage' },
+      { title: 'Coupe de Tunisie', season: '2023-24', icon: '🥈', color: '#9ca3af', awardType: 'trophy', year: '2024', club: 'FC Carthage' },
     ];
     const career = [
-      { title: 'Première sélection', season: String(new Date().getFullYear() - 4), icon: '⭐', color: '#3B82F6', awardType: 'career', year: String(new Date().getFullYear() - 4), club, event: 'Première sélection' },
-      { title: 'Championnat remporté', season: String(new Date().getFullYear() - 2), icon: '🏆', color: '#d99a1f', awardType: 'career', year: String(new Date().getFullYear() - 2), club, event: 'Championnat remporté' },
+      { title: 'Première sélection', season: '2022', icon: '⭐', color: '#3B82F6', awardType: 'career', year: '2022', club: 'Club Sportif Sfaxien', event: 'Première sélection' },
+      { title: 'Championnat remporté', season: '2024', icon: '🏆', color: '#d99a1f', awardType: 'career', year: '2024', club: 'FC Carthage', event: 'Championnat remporté' },
     ];
     const all = [...awards, ...trophies, ...career];
     await this.prisma.playerAward.createMany({
@@ -2825,6 +2749,287 @@ Question: ${dto.question}`,
       durationMs: Date.now() - started,
       model: config.model,
       clubName: ctx.clubName,
+    };
+  }
+
+  // ─── MATCHES ─────────────────────────
+
+  async getMatches(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const matches = await this.prisma.clubMatch.findMany({
+      where: { organizationId },
+      orderBy: { matchDate: 'desc' },
+    });
+
+    const now = new Date();
+    const past = matches
+      .filter((m) => new Date(m.matchDate) < now)
+      .map((m) => this.formatMatch(m));
+    const upcoming = matches
+      .filter((m) => new Date(m.matchDate) >= now)
+      .sort(
+        (a, b) =>
+          new Date(a.matchDate).getTime() - new Date(b.matchDate).getTime(),
+      )
+      .map((m) => this.formatMatch(m));
+
+    const nextMatch = upcoming[0] ?? null;
+    const daysToNext = nextMatch
+      ? Math.ceil(
+          (new Date(nextMatch.matchDateISO).getTime() - Date.now()) / 86400000,
+        )
+      : null;
+
+    return { past, upcoming, nextMatch, daysToNext };
+  }
+
+  private formatMatch(m: {
+    id: string;
+    opponent: string;
+    competition: string;
+    matchDate: Date;
+    homeAway: string;
+    goalsFor: number;
+    goalsAgainst: number;
+    result: string;
+    opponentFormation: string | null;
+    opponentStrengths: string | null;
+    opponentWeaknesses: string | null;
+    notes: string | null;
+    createdAt: Date;
+  }) {
+    return {
+      id: m.id,
+      opponent: m.opponent,
+      competition: m.competition,
+      matchDate: new Date(m.matchDate).toLocaleDateString('fr-FR', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+      }),
+      matchDateISO: m.matchDate,
+      homeAway: m.homeAway,
+      homeAwayLabel: m.homeAway === 'D' ? 'Domicile' : 'Extérieur',
+      goalsFor: m.goalsFor,
+      goalsAgainst: m.goalsAgainst,
+      score:
+        m.goalsFor !== null && m.goalsAgainst !== null
+          ? `${m.goalsFor} - ${m.goalsAgainst}`
+          : null,
+      result: m.result,
+      resultLabel:
+        m.result === 'V'
+          ? 'Victoire'
+          : m.result === 'N'
+            ? 'Nul'
+            : 'Défaite',
+      opponentFormation: m.opponentFormation ?? null,
+      opponentStrengths: m.opponentStrengths ?? null,
+      opponentWeaknesses: m.opponentWeaknesses ?? null,
+      notes: m.notes ?? null,
+      createdAt: m.createdAt,
+    };
+  }
+
+  async createMatch(user: JwtPayload, data: Record<string, unknown>) {
+    const organizationId = this.orgId(user);
+    const match = await this.prisma.clubMatch.create({
+      data: {
+        organizationId,
+        opponent: String(data.opponent ?? ''),
+        competition: String(data.competition ?? 'Ligue 1'),
+        matchDate: new Date(String(data.matchDate)),
+        homeAway: String(data.homeAway ?? 'D'),
+        goalsFor: data.goalsFor !== undefined ? Number(data.goalsFor) : 0,
+        goalsAgainst:
+          data.goalsAgainst !== undefined ? Number(data.goalsAgainst) : 0,
+        result: String(data.result ?? 'N'),
+        opponentFormation: data.opponentFormation
+          ? String(data.opponentFormation)
+          : null,
+        opponentStrengths: data.opponentStrengths
+          ? String(data.opponentStrengths)
+          : null,
+        opponentWeaknesses: data.opponentWeaknesses
+          ? String(data.opponentWeaknesses)
+          : null,
+        notes: data.notes ? String(data.notes) : null,
+      },
+    });
+    return this.formatMatch(match);
+  }
+
+  async updateMatch(
+    user: JwtPayload,
+    id: string,
+    data: Record<string, unknown>,
+  ) {
+    const organizationId = this.orgId(user);
+    const existing = await this.prisma.clubMatch.findFirst({
+      where: { id, organizationId },
+    });
+    if (!existing) throw new NotFoundException('Match introuvable.');
+
+    const updated = await this.prisma.clubMatch.update({
+      where: { id },
+      data: {
+        ...(data.opponent !== undefined
+          ? { opponent: String(data.opponent) }
+          : {}),
+        ...(data.competition !== undefined
+          ? { competition: String(data.competition) }
+          : {}),
+        ...(data.matchDate !== undefined
+          ? { matchDate: new Date(String(data.matchDate)) }
+          : {}),
+        ...(data.homeAway !== undefined
+          ? { homeAway: String(data.homeAway) }
+          : {}),
+        ...(data.goalsFor !== undefined
+          ? { goalsFor: Number(data.goalsFor) }
+          : {}),
+        ...(data.goalsAgainst !== undefined
+          ? { goalsAgainst: Number(data.goalsAgainst) }
+          : {}),
+        ...(data.result !== undefined
+          ? { result: String(data.result) }
+          : {}),
+        ...(data.opponentFormation !== undefined
+          ? {
+              opponentFormation: data.opponentFormation
+                ? String(data.opponentFormation)
+                : null,
+            }
+          : {}),
+        ...(data.opponentStrengths !== undefined
+          ? {
+              opponentStrengths: data.opponentStrengths
+                ? String(data.opponentStrengths)
+                : null,
+            }
+          : {}),
+        ...(data.opponentWeaknesses !== undefined
+          ? {
+              opponentWeaknesses: data.opponentWeaknesses
+                ? String(data.opponentWeaknesses)
+                : null,
+            }
+          : {}),
+        ...(data.notes !== undefined
+          ? { notes: data.notes ? String(data.notes) : null }
+          : {}),
+      },
+    });
+    return this.formatMatch(updated);
+  }
+
+  async deleteMatch(user: JwtPayload, id: string) {
+    const organizationId = this.orgId(user);
+    const existing = await this.prisma.clubMatch.findFirst({
+      where: { id, organizationId },
+    });
+    if (!existing) throw new NotFoundException('Match introuvable.');
+    await this.prisma.clubMatch.delete({ where: { id } });
+    return { message: 'Match supprimé.' };
+  }
+
+  // ─── STANDING ────────────────────────
+
+  async getStanding(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const standing = await this.prisma.clubStanding.findUnique({
+      where: { organizationId },
+    });
+
+    if (!standing) {
+      return {
+        exists: false,
+        competition: 'Ligue 1',
+        position: null,
+        points: null,
+        played: null,
+        won: null,
+        drawn: null,
+        lost: null,
+        goalsFor: null,
+        goalsAgainst: null,
+        goalDifference: null,
+        form: [],
+      };
+    }
+
+    return {
+      exists: true,
+      competition: standing.competition,
+      position: standing.position,
+      points: standing.points,
+      played: standing.played,
+      won: standing.won,
+      drawn: standing.drawn,
+      lost: standing.lost,
+      goalsFor: standing.goalsFor,
+      goalsAgainst: standing.goalsAgainst,
+      goalDifference: standing.goalsFor - standing.goalsAgainst,
+      form: standing.form ? standing.form.split(',').filter(Boolean) : [],
+    };
+  }
+
+  async updateStanding(user: JwtPayload, data: Record<string, unknown>) {
+    const organizationId = this.orgId(user);
+
+    const standing = await this.prisma.clubStanding.upsert({
+      where: { organizationId },
+      create: {
+        organizationId,
+        competition: String(data.competition ?? 'Ligue 1'),
+        position: Number(data.position ?? 1),
+        points: Number(data.points ?? 0),
+        played: Number(data.played ?? 0),
+        won: Number(data.won ?? 0),
+        drawn: Number(data.drawn ?? 0),
+        lost: Number(data.lost ?? 0),
+        goalsFor: Number(data.goalsFor ?? 0),
+        goalsAgainst: Number(data.goalsAgainst ?? 0),
+        form: String(data.form ?? ''),
+      },
+      update: {
+        ...(data.competition !== undefined
+          ? { competition: String(data.competition) }
+          : {}),
+        ...(data.position !== undefined
+          ? { position: Number(data.position) }
+          : {}),
+        ...(data.points !== undefined ? { points: Number(data.points) } : {}),
+        ...(data.played !== undefined
+          ? { played: Number(data.played) }
+          : {}),
+        ...(data.won !== undefined ? { won: Number(data.won) } : {}),
+        ...(data.drawn !== undefined ? { drawn: Number(data.drawn) } : {}),
+        ...(data.lost !== undefined ? { lost: Number(data.lost) } : {}),
+        ...(data.goalsFor !== undefined
+          ? { goalsFor: Number(data.goalsFor) }
+          : {}),
+        ...(data.goalsAgainst !== undefined
+          ? { goalsAgainst: Number(data.goalsAgainst) }
+          : {}),
+        ...(data.form !== undefined ? { form: String(data.form) } : {}),
+      },
+    });
+
+    return {
+      exists: true,
+      competition: standing.competition,
+      position: standing.position,
+      points: standing.points,
+      played: standing.played,
+      won: standing.won,
+      drawn: standing.drawn,
+      lost: standing.lost,
+      goalsFor: standing.goalsFor,
+      goalsAgainst: standing.goalsAgainst,
+      goalDifference: standing.goalsFor - standing.goalsAgainst,
+      form: standing.form ? standing.form.split(',').filter(Boolean) : [],
     };
   }
 }
