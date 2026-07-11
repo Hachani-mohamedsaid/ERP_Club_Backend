@@ -851,7 +851,13 @@ export class ScoutService {
   }
 
   private pickPreferredProspect<
-    T extends { id: string; fullName: string; potential: number; scoutExtra: unknown; createdAt: Date },
+    T extends {
+      id: string;
+      fullName: string;
+      potential: number;
+      scoutExtra: Prisma.JsonValue | null;
+      createdAt: Date;
+    },
   >(a: T, b: T): T {
     const exA = this.extra(a);
     const exB = this.extra(b);
