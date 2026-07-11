@@ -404,6 +404,60 @@ function generateFallbackSquad(
   });
 }
 
+export function hasCuratedFlashscoreSquad(
+  teamId: string,
+  teamName: string,
+  countryId: string,
+): boolean {
+  const idKey = teamId.toLowerCase();
+  const nameKey = teamName.toLowerCase();
+  const rosterId = rosterTeamId(countryId, teamName);
+
+  return SQUADS.some((entry) =>
+    entry.keys.some(
+      (k) =>
+        k === idKey ||
+        k === rosterId ||
+        k === nameKey ||
+        matchClubName(teamName, k) ||
+        matchClubName(k, teamName),
+    ),
+  );
+}
+
+/** Joueurs partis — filtrés même si OpenAI/cache les renvoie encore. */
+export const DEPARTED_PLAYERS: Record<string, string[]> = {
+  manu: ['raphaël varane', 'david de gea', 'jaden sancho', 'anthony martial', 'scott mctominay', 'mason greenwood'],
+  'gb-manchester-united': ['raphaël varane', 'david de gea', 'jaden sancho', 'anthony martial', 'scott mctominay'],
+  'manchester united': ['raphaël varane', 'david de gea', 'jaden sancho'],
+  'man united': ['raphaël varane', 'david de gea', 'jaden sancho'],
+};
+
+function normPlayerName(name: string) {
+  return name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+export function filterDepartedPlayers(
+  players: FlashscorePlayerSeed[],
+  teamId: string,
+  teamName: string,
+  countryId: string,
+): FlashscorePlayerSeed[] {
+  const rosterId = rosterTeamId(countryId, teamName);
+  const keys = [teamId.toLowerCase(), rosterId, teamName.toLowerCase(), 'man united', 'manchester united'];
+  const departed = new Set<string>();
+  for (const key of keys) {
+    for (const name of DEPARTED_PLAYERS[key] ?? []) {
+      departed.add(normPlayerName(name));
+    }
+  }
+  if (departed.size === 0) return players;
+  return players.filter((p) => !departed.has(normPlayerName(p.name)));
+}
+
 export function resolveFlashscoreSquad(
   teamId: string,
   teamName: string,
@@ -426,7 +480,7 @@ export function resolveFlashscoreSquad(
           matchClubName(k, teamName),
       )
     ) {
-      return entry.players;
+      return filterDepartedPlayers(entry.players, teamId, teamName, countryId);
     }
   }
 

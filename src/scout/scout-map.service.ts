@@ -16,7 +16,7 @@ import {
   type GeoTeam,
 } from './data/scout-geo-catalog';
 import { rosterTeamId } from './data/league-rosters';
-import { resolveFlashscoreSquad } from './data/flashscore-squads';
+import { resolveFlashscoreSquad, hasCuratedFlashscoreSquad, filterDepartedPlayers } from './data/flashscore-squads';
 
 type SquadPlayer = {
   id: string;
@@ -466,6 +466,31 @@ Règles:
     }));
   }
 
+  private filterSquadDeparted(
+    players: SquadPlayer[],
+    teamId: string,
+    teamName: string,
+    countryId: string,
+  ): SquadPlayer[] {
+    return players.filter((p) => {
+      const kept = filterDepartedPlayers(
+        [{
+          name: p.name,
+          position: p.position,
+          age: p.age,
+          nationality: p.nationality,
+          potential: p.potential,
+          currentRating: p.currentRating,
+          marketValue: p.marketValue,
+        }],
+        teamId,
+        teamName,
+        countryId,
+      );
+      return kept.length > 0;
+    });
+  }
+
   async getTeamSquad(user: JwtPayload, teamId: string, refresh = false) {
     const team = await this.resolveTeam(teamId);
     if (!team) throw new NotFoundException('Équipe introuvable.');
@@ -477,6 +502,7 @@ Règles:
       .filter((p) => matchClubName(p.club, team.name))
       .map((p) => this.mapProspectToSquadPlayer(p));
 
+    const isCurated = hasCuratedFlashscoreSquad(teamId, team.name, team.countryId);
     const flashscoreSeeds = resolveFlashscoreSquad(
       teamId,
       team.name,
@@ -484,8 +510,9 @@ Règles:
       country.name,
       team.avgPotential,
     );
-    let rosterPlayers = this.mapFlashscoreToSquad(teamId, flashscoreSeeds, country.flag);
+    const staticPlayers = this.mapFlashscoreToSquad(teamId, flashscoreSeeds, country.flag);
 
+    let rosterPlayers = staticPlayers;
     let dataSource: 'live' | 'flashscore' = 'flashscore';
     let updatedAt = new Date().toISOString();
     let fromCache = false;
@@ -497,40 +524,75 @@ Règles:
       : Infinity;
     const cacheStale = cacheAge >= SQUAD_CACHE_TTL_MS;
     const hasLegacyAiCache = cached?.players.some((p) => p.source === 'ai') ?? false;
-    const shouldLiveRefresh = refresh || cacheStale || hasLegacyAiCache;
+    const hasBadLiveCache =
+      cached?.source === 'live' &&
+      this.filterSquadDeparted(cached.players, teamId, team.name, team.countryId).length <
+        cached.players.length;
 
-    const config = await this.resolveAiConfig();
-
-    if (shouldLiveRefresh && config.enabled && config.apiKey) {
-      try {
-        const live = await this.fetchLiveSquadFromOpenAi(teamId, team, country, config);
-        if (live.length >= 11) {
-          rosterPlayers = live;
-          dataSource = 'live';
-          updatedAt = new Date().toISOString();
-          await this.saveSquadCache(teamId, live, 'live');
-        } else if (rosterPlayers.length > 0) {
-          await this.saveSquadCache(teamId, rosterPlayers, 'flashscore');
-        }
-      } catch {
-        if (rosterPlayers.length > 0) {
-          await this.saveSquadCache(teamId, rosterPlayers, 'flashscore');
-        }
+    // Effectifs curés Flashscore : jamais remplacés par OpenAI (souvent obsolète)
+    if (isCurated) {
+      rosterPlayers = staticPlayers;
+      dataSource = 'flashscore';
+      if (refresh || !cached || hasLegacyAiCache || hasBadLiveCache || cached.source === 'live') {
+        await this.saveSquadCache(teamId, staticPlayers, 'flashscore');
+        updatedAt = new Date().toISOString();
+      } else if (cached && !cacheStale) {
+        rosterPlayers = this.filterSquadDeparted(
+          cached.players.map((p) => ({ ...p, source: 'flashscore' as const })),
+          teamId,
+          team.name,
+          team.countryId,
+        );
+        updatedAt = cached.generatedAt;
+        fromCache = true;
       }
-    } else if (cached && !cacheStale && cached.players.length > 0 && !hasLegacyAiCache) {
-      rosterPlayers = cached.players.map((p) => ({
-        ...p,
-        source: 'flashscore' as const,
-      }));
-      dataSource = cached.source === 'live' ? 'live' : 'flashscore';
-      updatedAt = cached.generatedAt;
-      fromCache = true;
-    } else if (rosterPlayers.length > 0) {
-      await this.saveSquadCache(teamId, rosterPlayers, 'flashscore');
+    } else {
+      const shouldLiveRefresh = refresh || cacheStale || hasLegacyAiCache || hasBadLiveCache;
+      const config = await this.resolveAiConfig();
+
+      if (shouldLiveRefresh && config.enabled && config.apiKey) {
+        try {
+          const live = this.filterSquadDeparted(
+            await this.fetchLiveSquadFromOpenAi(teamId, team, country, config),
+            teamId,
+            team.name,
+            team.countryId,
+          );
+          if (live.length >= 11) {
+            rosterPlayers = live;
+            dataSource = 'live';
+            updatedAt = new Date().toISOString();
+            await this.saveSquadCache(teamId, live, 'live');
+          } else if (staticPlayers.length > 0) {
+            rosterPlayers = staticPlayers;
+            await this.saveSquadCache(teamId, staticPlayers, 'flashscore');
+          }
+        } catch {
+          rosterPlayers = staticPlayers;
+          if (staticPlayers.length > 0) {
+            await this.saveSquadCache(teamId, staticPlayers, 'flashscore');
+          }
+        }
+      } else if (cached && !cacheStale && cached.players.length > 0 && !hasLegacyAiCache && !hasBadLiveCache) {
+        rosterPlayers = this.filterSquadDeparted(
+          cached.players.map((p) => ({ ...p, source: 'flashscore' as const })),
+          teamId,
+          team.name,
+          team.countryId,
+        );
+        dataSource = cached.source === 'live' ? 'live' : 'flashscore';
+        updatedAt = cached.generatedAt;
+        fromCache = true;
+      } else if (staticPlayers.length > 0) {
+        rosterPlayers = staticPlayers;
+        await this.saveSquadCache(teamId, staticPlayers, 'flashscore');
+      }
     }
 
+    rosterPlayers = this.filterSquadDeparted(rosterPlayers, teamId, team.name, team.countryId);
     const players = this.mergeFlashscoreRoster(rosterPlayers, dbProspects);
     const linkedDb = players.filter((p) => p.inDatabase).length;
+    const config = await this.resolveAiConfig();
 
     return {
       team: { ...team, country },
@@ -540,11 +602,11 @@ Règles:
         flashscore: players.length,
         ai: 0,
       },
-      dataSource,
+      dataSource: isCurated ? 'flashscore' : dataSource,
       season: '2026-2027',
       updatedAt,
       cached: fromCache,
-      autoRefresh: shouldLiveRefresh,
+      autoRefresh: !isCurated && (refresh || cacheStale),
       aiEnabled: Boolean(config.apiKey && config.enabled),
     };
   }
