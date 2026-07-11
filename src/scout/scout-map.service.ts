@@ -33,8 +33,10 @@ type SquadPlayer = {
   prospectId?: string;
 };
 
-type SquadCache = Record<string, { players: SquadPlayer[]; generatedAt: string }>;
+type SquadCache = Record<string, { players: SquadPlayer[]; generatedAt: string; source?: 'live' | 'flashscore' }>;
 type TeamCache = Record<string, { teams: GeoTeam[]; generatedAt: string }>;
+
+const SQUAD_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 @Injectable()
 export class ScoutMapService {
@@ -191,11 +193,15 @@ Règles: liste COMPLÈTE (16-20 clubs), noms réels, saison 2024-25.`,
     return {};
   }
 
-  private async saveSquadCache(teamId: string, players: SquadPlayer[]) {
+  private async saveSquadCache(
+    teamId: string,
+    players: SquadPlayer[],
+    source: 'live' | 'flashscore' = 'flashscore',
+  ) {
     const row = await this.prisma.platformSettings.findUnique({ where: { id: 'default' } });
     const extended = (row?.extendedSettings ?? {}) as Record<string, unknown>;
     const cache = (extended.scoutSquadCache ?? {}) as SquadCache;
-    cache[teamId] = { players, generatedAt: new Date().toISOString() };
+    cache[teamId] = { players, generatedAt: new Date().toISOString(), source };
 
     await this.prisma.platformSettings.upsert({
       where: { id: 'default' },
@@ -396,76 +402,20 @@ Règles: liste COMPLÈTE (16-20 clubs), noms réels, saison 2024-25.`,
     }));
   }
 
-  async getTeamSquad(user: JwtPayload, teamId: string, refresh = false) {
-    const team = await this.resolveTeam(teamId);
-    if (!team) throw new NotFoundException('Équipe introuvable.');
-    const country = getCountry(team.countryId);
-    if (!country) throw new NotFoundException('Pays introuvable.');
-
-    const prospects = await this.scout.listProspects(user);
-    const dbPlayers = prospects
-      .filter((p) => matchClubName(p.club, team.name))
-      .map((p) => this.mapProspectToSquadPlayer(p));
-
-    const flashscoreSeeds = resolveFlashscoreSquad(
-      teamId,
-      team.name,
-      team.countryId,
-      country.name,
-      team.avgPotential,
-    );
-    const flashscorePlayers = this.mapFlashscoreToSquad(
-      teamId,
-      flashscoreSeeds,
-      country.flag,
-    );
-
-    if (flashscorePlayers.length > 0) {
-      const merged = this.mergeSquad(dbPlayers, flashscorePlayers);
-      if (refresh) {
-        await this.saveSquadCache(teamId, flashscorePlayers);
-      }
-      return {
-        team: { ...team, country },
-        players: merged,
-        sources: {
-          database: dbPlayers.length,
-          flashscore: flashscorePlayers.length,
-          ai: 0,
-        },
-        dataSource: 'flashscore',
-        season: '2026-2027',
-        cached: false,
-      };
-    }
-
-    const cache = await this.getSquadCache();
-    const cached = cache[teamId];
-    const cacheAge = cached
-      ? Date.now() - new Date(cached.generatedAt).getTime()
-      : Infinity;
-    const cacheValid = !refresh && cached && cacheAge < 7 * 24 * 60 * 60 * 1000;
-
-    if (cacheValid && cached.players.length > 0) {
-      const merged = this.mergeSquad(dbPlayers, cached.players);
-      return {
-        team: { ...team, country },
-        players: merged,
-        sources: { database: dbPlayers.length, ai: merged.filter((p) => p.source === 'ai').length },
-        cached: true,
-      };
-    }
-
-    const config = await this.resolveAiConfig();
-    let aiPlayers: SquadPlayer[] = [];
-
-    if (config.enabled && config.apiKey) {
-      try {
-        const raw = await this.callOpenAi(
-          config.apiKey,
-          config.model,
-          `Tu es un expert scout football ODIN ERP.
-Génère l'effectif actuel RÉEL de l'équipe demandée (saison 2024-25 ou la plus récente).
+  private async fetchLiveSquadFromOpenAi(
+    teamId: string,
+    team: GeoTeam,
+    country: NonNullable<ReturnType<typeof getCountry>>,
+    config: { apiKey: string; model: string },
+  ): Promise<SquadPlayer[]> {
+    const today = new Date().toISOString().slice(0, 10);
+    const raw = await this.callOpenAi(
+      config.apiKey,
+      config.model,
+      `Tu es un fournisseur de données football style Flashscore pour ODIN ERP.
+Date du jour: ${today}
+Génère l'effectif ACTUEL et COMPLET de l'équipe (dernière saison en cours ou la plus récente).
+N'inclus AUCUN joueur ayant quitté le club (transferts, prêts terminés, retraités, libérés).
 Réponds UNIQUEMENT en JSON valide:
 {
   "players": [
@@ -481,63 +431,143 @@ Réponds UNIQUEMENT en JSON valide:
   ]
 }
 Règles:
-- 18 à 22 joueurs réels actuels de l'équipe
+- 18 à 25 joueurs réels actuels de l'équipe AUJOURD'HUI
 - potential et currentRating entre 55 et 95
 - Utilise les VRAIS noms de joueurs professionnels
 - Positions en abréviations FR (BU, MC, DC, etc.)`,
-          `Équipe: ${team.name}\nLigue: ${team.league}\nPays: ${country.name}\nVille: ${team.city}`,
-          2500,
-        );
+      `Équipe: ${team.name}\nLigue: ${team.league}\nPays: ${country.name}\nVille: ${team.city}\nDate: ${today}`,
+      2800,
+    );
 
-        const parsed = JSON.parse(raw.replace(/```json\n?|\n?```/g, '')) as {
-          players?: {
-            name: string;
-            position: string;
-            age: number;
-            nationality: string;
-            potential: number;
-            currentRating: number;
-            marketValue: string;
-          }[];
-        };
+    const parsed = JSON.parse(raw.replace(/```json\n?|\n?```/g, '')) as {
+      players?: {
+        name: string;
+        position: string;
+        age: number;
+        nationality: string;
+        potential: number;
+        currentRating: number;
+        marketValue: string;
+      }[];
+    };
 
-        aiPlayers = (parsed.players ?? []).map((p, i) => ({
-          id: `${teamId}-ai-${i}`,
-          name: p.name,
-          position: p.position,
-          age: p.age,
-          nationality: p.nationality,
-          flag: country.flag,
-          potential: p.potential,
-          currentRating: p.currentRating,
-          marketValue: p.marketValue,
-          source: 'ai' as const,
-          inDatabase: false,
-        }));
+    return (parsed.players ?? []).map((p, i) => ({
+      id: `${teamId}-live-${i}`,
+      name: p.name,
+      position: p.position,
+      age: p.age,
+      nationality: p.nationality,
+      flag: country.flag,
+      potential: p.potential,
+      currentRating: p.currentRating,
+      marketValue: p.marketValue,
+      source: 'flashscore' as const,
+      inDatabase: false,
+    }));
+  }
+
+  async getTeamSquad(user: JwtPayload, teamId: string, refresh = false) {
+    const team = await this.resolveTeam(teamId);
+    if (!team) throw new NotFoundException('Équipe introuvable.');
+    const country = getCountry(team.countryId);
+    if (!country) throw new NotFoundException('Pays introuvable.');
+
+    const prospects = await this.scout.listProspects(user);
+    const dbProspects = prospects
+      .filter((p) => matchClubName(p.club, team.name))
+      .map((p) => this.mapProspectToSquadPlayer(p));
+
+    const flashscoreSeeds = resolveFlashscoreSquad(
+      teamId,
+      team.name,
+      team.countryId,
+      country.name,
+      team.avgPotential,
+    );
+    let rosterPlayers = this.mapFlashscoreToSquad(teamId, flashscoreSeeds, country.flag);
+
+    let dataSource: 'live' | 'flashscore' = 'flashscore';
+    let updatedAt = new Date().toISOString();
+    let fromCache = false;
+
+    const cache = await this.getSquadCache();
+    const cached = cache[teamId];
+    const cacheAge = cached
+      ? Date.now() - new Date(cached.generatedAt).getTime()
+      : Infinity;
+    const cacheStale = cacheAge >= SQUAD_CACHE_TTL_MS;
+    const hasLegacyAiCache = cached?.players.some((p) => p.source === 'ai') ?? false;
+    const shouldLiveRefresh = refresh || cacheStale || hasLegacyAiCache;
+
+    const config = await this.resolveAiConfig();
+
+    if (shouldLiveRefresh && config.enabled && config.apiKey) {
+      try {
+        const live = await this.fetchLiveSquadFromOpenAi(teamId, team, country, config);
+        if (live.length >= 11) {
+          rosterPlayers = live;
+          dataSource = 'live';
+          updatedAt = new Date().toISOString();
+          await this.saveSquadCache(teamId, live, 'live');
+        } else if (rosterPlayers.length > 0) {
+          await this.saveSquadCache(teamId, rosterPlayers, 'flashscore');
+        }
       } catch {
-        aiPlayers = this.fallbackSquad(team, country);
+        if (rosterPlayers.length > 0) {
+          await this.saveSquadCache(teamId, rosterPlayers, 'flashscore');
+        }
       }
-    } else {
-      aiPlayers = this.fallbackSquad(team, country);
+    } else if (cached && !cacheStale && cached.players.length > 0 && !hasLegacyAiCache) {
+      rosterPlayers = cached.players.map((p) => ({
+        ...p,
+        source: 'flashscore' as const,
+      }));
+      dataSource = cached.source === 'live' ? 'live' : 'flashscore';
+      updatedAt = cached.generatedAt;
+      fromCache = true;
+    } else if (rosterPlayers.length > 0) {
+      await this.saveSquadCache(teamId, rosterPlayers, 'flashscore');
     }
 
-    const merged = this.mergeSquad(dbPlayers, aiPlayers);
-    if (aiPlayers.length > 0) {
-      await this.saveSquadCache(teamId, aiPlayers);
-    }
+    const players = this.mergeFlashscoreRoster(rosterPlayers, dbProspects);
+    const linkedDb = players.filter((p) => p.inDatabase).length;
 
     return {
       team: { ...team, country },
-      players: merged,
-      sources: { database: dbPlayers.length, ai: merged.filter((p) => p.source === 'ai').length },
-      cached: false,
+      players,
+      sources: {
+        database: linkedDb,
+        flashscore: players.length,
+        ai: 0,
+      },
+      dataSource,
+      season: '2026-2027',
+      updatedAt,
+      cached: fromCache,
+      autoRefresh: shouldLiveRefresh,
       aiEnabled: Boolean(config.apiKey && config.enabled),
     };
   }
 
-  private mergeSquad(dbPlayers: SquadPlayer[], aiPlayers: SquadPlayer[]): SquadPlayer[] {
-    const seen = new Set(dbPlayers.map((p) => p.name.toLowerCase()));
-    const extra = aiPlayers.filter((p) => !seen.has(p.name.toLowerCase()));
-    return [...dbPlayers, ...extra].sort((a, b) => b.potential - a.potential);
+  /** Effectif Flashscore = source de vérité ; la base scout ne fait qu'enrichir les joueurs déjà présents. */
+  private mergeFlashscoreRoster(
+    rosterPlayers: SquadPlayer[],
+    dbProspects: SquadPlayer[],
+  ): SquadPlayer[] {
+    const dbByName = new Map(dbProspects.map((p) => [p.name.toLowerCase(), p]));
+    return rosterPlayers
+      .map((player) => {
+        const db = dbByName.get(player.name.toLowerCase());
+        if (!db) return player;
+        return {
+          ...player,
+          id: db.id,
+          inDatabase: true,
+          prospectId: db.prospectId,
+          potential: Math.max(player.potential, db.potential),
+          currentRating: Math.max(player.currentRating, db.currentRating),
+        };
+      })
+      .sort((a, b) => b.potential - a.potential);
   }
 }
