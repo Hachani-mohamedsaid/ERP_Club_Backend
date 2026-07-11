@@ -73,6 +73,7 @@ model Organization {
   prepNotifications PrepNotification[]
   recruteurNotifications RecruteurNotification[]
   recruteurAuditLogs RecruteurAuditLog[]
+  recruteurCalendarEvents RecruteurCalendarEvent[]
   sponsors         ClubSponsor[]
   invoices         ClubInvoice[]
   validationRequests ValidationRequest[]
@@ -974,6 +975,29 @@ enum RecruteurAuditSeverity {
   SUCCESS
   WARNING
   CRITICAL
+}
+
+model RecruteurCalendarEvent {
+  id             String                    @id @default(uuid())
+  organizationId String
+  title          String
+  eventDate      DateTime
+  eventTime      String?
+  type           RecruteurCalendarEventType @default(MATCH)
+  location       String?
+  note           String?
+  createdAt      DateTime                  @default(now())
+  organization   Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+enum RecruteurCalendarEventType {
+  MATCH
+  AGENT
+  VALIDATION
+  CONTRAT
+  DEPLACEMENT
 }
 
 model ScoutWatchlist {
