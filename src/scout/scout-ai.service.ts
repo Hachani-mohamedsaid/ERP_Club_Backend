@@ -566,10 +566,11 @@ Réponds UNIQUEMENT en JSON valide:
     }
   ]
 }
-Règles:
+Règles STRICTES:
 - Exactement 3 recommandations triées par compatibility (85-98)
-- prospectId DOIT matcher un id du snapshot DB
-- reasons: 2-3 phrases courtes en français, spécifiques au joueur
+- prospectId DOIT être copié EXACTEMENT depuis snapshot[].id (UUID)
+- INTERDIT d'inventer un joueur absent du snapshot
+- reasons: 2-3 phrases courtes en français basées UNIQUEMENT sur les stats du snapshot
 - warn: concurrence, blessure, contrat, agent — ou null`,
       `Club: ${org?.clubName ?? 'Club'} (${org?.league ?? '—'}, ${org?.country ?? '—'})
 Snapshot prospects DB (${snapshot.length}):
@@ -598,6 +599,8 @@ Besoins typiques: renfort offensif jeune, valeur marché optimisée, profils pr�
       .map((r) => {
         const p = prospects.find((x) => x.id === r.prospectId);
         if (!p) return null;
+        const validIds = new Set(snapshot.map((s) => s.id));
+        if (!validIds.has(p.id)) return null;
         return {
           id: p.id,
           name: p.name,
@@ -623,6 +626,31 @@ Besoins typiques: renfort offensif jeune, valeur marché optimisée, profils pr�
       reasons: string[];
       warn?: string;
     }[];
+
+    if (recs.length > 0 && recs.length < 3) {
+      const picked = new Set(recs.map((r) => r.id));
+      const extras = [...prospects]
+        .filter((p) => !picked.has(p.id))
+        .sort((a, b) => b.aiScore - a.aiScore)
+        .slice(0, 3 - recs.length)
+        .map((p) => ({
+          id: p.id,
+          name: p.name,
+          pos: p.position,
+          age: p.age,
+          club: p.club,
+          flag: p.flag,
+          score: p.aiScore,
+          budget: p.marketValue,
+          reasons: [
+            `Potentiel ${p.potential}/100`,
+            `Score IA ${p.aiScore}`,
+            p.agent ? `Agent: ${p.agent}` : 'Profil complémentaire',
+          ],
+          warn: p.injuryRisk > 25 ? `Risque blessure ${p.injuryRisk}%` : undefined,
+        }));
+      recs.push(...extras);
+    }
 
     return recs.length > 0 ? recs.slice(0, 3) : null;
   }

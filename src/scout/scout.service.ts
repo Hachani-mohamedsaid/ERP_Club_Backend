@@ -3,6 +3,12 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import {
+  isManchesterUnitedOrg,
+  MANCHESTER_UNITED_2026_2027,
+  MU_SEASON_TAG,
+  type ScoutDatasetBundle,
+} from './data/manchester-united-2026-2027.dataset';
 import { CalendarEventType, Prisma, RecruitmentStatus } from '@prisma/client';
 import { JwtPayload } from '../auth/jwt-payload.interface';
 import { ClubAccessService } from '../club/club-access.service';
@@ -242,6 +248,21 @@ const SEED_PROSPECTS = [
   },
 ];
 
+const DEFAULT_SCOUT_DATASET: ScoutDatasetBundle = {
+  season: '',
+  prospects: SEED_PROSPECTS.map((p) => ({
+    ...p,
+    createdAt: '2026-01-01T10:00:00.000Z',
+    scoutExtra: { ...p.scoutExtra, seasonTag: 'default-africa' },
+  })),
+  reports: [],
+  missions: [],
+  watchlist: [
+    { prospectName: 'Youssef Ben Ali', priority: 'A', notes: [] },
+    { prospectName: 'Ibrahim Touré', priority: 'A', notes: [] },
+  ],
+};
+
 @Injectable()
 export class ScoutService {
   constructor(
@@ -359,11 +380,33 @@ export class ScoutService {
     };
   }
 
-  private async ensureSeed(organizationId: string, scoutName: string) {
-    const count = await this.prisma.recruitmentProspect.count({ where: { organizationId } });
-    if (count > 0) return;
+  private async hasDatasetTag(organizationId: string, tag: string) {
+    const rows = await this.prisma.recruitmentProspect.findMany({
+      where: { organizationId },
+      select: { scoutExtra: true },
+      take: 20,
+    });
+    return rows.some((r) => {
+      const ex = (r.scoutExtra ?? {}) as ScoutExtra;
+      return ex.seasonTag === tag;
+    });
+  }
 
-    for (const seed of SEED_PROSPECTS) {
+  private async clearScoutOrgData(organizationId: string) {
+    await this.prisma.scoutWatchlist.deleteMany({ where: { organizationId } });
+    await this.prisma.scoutReport.deleteMany({ where: { organizationId } });
+    await this.prisma.recruitmentProspect.deleteMany({ where: { organizationId } });
+    await this.prisma.clubCalendarEvent.deleteMany({
+      where: { organizationId, eventType: 'SCOUT' },
+    });
+  }
+
+  private async applyScoutDataset(
+    organizationId: string,
+    scoutName: string,
+    dataset: ScoutDatasetBundle,
+  ) {
+    for (const seed of dataset.prospects) {
       await this.prisma.recruitmentProspect.create({
         data: {
           organizationId,
@@ -377,45 +420,271 @@ export class ScoutService {
           status: seed.status,
           scoutName,
           scoutExtra: seed.scoutExtra as Prisma.InputJsonValue,
+          createdAt: new Date(seed.createdAt),
         },
       });
     }
 
-    const prospects = await this.prisma.recruitmentProspect.findMany({ where: { organizationId } });
-    const pr1 = prospects.find((p) => p.fullName === 'Youssef Ben Ali');
-    const pr6 = prospects.find((p) => p.fullName === 'Ibrahim Touré');
-    if (pr1) {
+    const prospects = await this.prisma.recruitmentProspect.findMany({
+      where: { organizationId },
+    });
+    const byName = new Map(prospects.map((p) => [p.fullName, p]));
+
+    for (const w of dataset.watchlist) {
+      const p = byName.get(w.prospectName);
+      if (!p) continue;
       await this.prisma.scoutWatchlist.create({
-        data: { organizationId, prospectId: pr1.id, priority: 'A', scoutName },
+        data: {
+          organizationId,
+          prospectId: p.id,
+          priority: w.priority,
+          scoutName,
+          notes: w.notes as Prisma.InputJsonValue,
+        },
       });
     }
-    if (pr6) {
-      await this.prisma.scoutWatchlist.create({
-        data: { organizationId, prospectId: pr6.id, priority: 'A', scoutName },
+
+    for (const r of dataset.reports) {
+      const p = byName.get(r.prospectName);
+      await this.prisma.scoutReport.create({
+        data: {
+          organizationId,
+          prospectId: p?.id,
+          prospectName: r.prospectName,
+          scoutName,
+          matchObserved: r.matchObserved,
+          opponent: r.opponent,
+          decision: r.decision,
+          aiScore: r.aiScore,
+          recommendation: r.recommendation,
+          technique: r.aiScore,
+          physique: r.aiScore - 2,
+          mental: r.aiScore - 1,
+          tactique: r.aiScore,
+          vitesse: r.aiScore,
+          createdAt: new Date(r.createdAt),
+        },
+      });
+    }
+
+    for (const m of dataset.missions) {
+      await this.prisma.clubCalendarEvent.create({
+        data: {
+          organizationId,
+          title: m.title,
+          eventDate: new Date(m.eventDate),
+          eventTime: m.eventTime,
+          eventType: 'SCOUT' as CalendarEventType,
+          location: m.location,
+          notes: m.notes,
+          extraData: { seasonTag: MU_SEASON_TAG } as Prisma.InputJsonValue,
+        },
       });
     }
   }
 
+  private async ensureSeed(organizationId: string, scoutName: string) {
+    const org = await this.prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { clubName: true },
+    });
+
+    const isMU = isManchesterUnitedOrg(org?.clubName);
+    const dataset = isMU ? MANCHESTER_UNITED_2026_2027 : DEFAULT_SCOUT_DATASET;
+    const targetTag = isMU ? MU_SEASON_TAG : 'default-africa';
+
+    const alreadyTagged = await this.hasDatasetTag(organizationId, targetTag);
+    if (alreadyTagged) return;
+
+    const count = await this.prisma.recruitmentProspect.count({ where: { organizationId } });
+    if (count > 0) {
+      if (!isMU) return;
+      await this.clearScoutOrgData(organizationId);
+    }
+
+    await this.applyScoutDataset(organizationId, scoutName, dataset);
+  }
+
   private monthLabels = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Jun', 'Jul', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc'];
 
-  private buildPipelineTrend(prospects: { createdAt: Date; status: RecruitmentStatus }[]) {
+  private footballSeason(now = new Date()) {
+    const y = now.getFullYear();
+    // Saison europe/Afrique du Nord : juillet → juin
+    return now.getMonth() >= 6 ? `${y}-${y + 1}` : `${y - 1}-${y}`;
+  }
+
+  private computeRecruitmentScore(p: {
+    potential: number;
+    aiScore: number;
+    injuryRisk: number;
+    valueMK: number;
+    priority: string;
+    status: string;
+    speed: number;
+    passing: number;
+    goals: number;
+    assists: number;
+  }) {
+    const priorityBonus = p.priority === 'A' ? 12 : p.priority === 'B' ? 6 : 0;
+    const workflowBonus =
+      p.status === 'signature' ? 10 :
+      p.status === 'validation' ? 8 :
+      p.status === 'analysis' ? 4 :
+      p.status === 'new' ? 2 : 0;
+    const budgetFit = Math.max(0, Math.min(100, 100 - p.valueMK / 40));
+    const production = Math.min(100, p.goals * 4 + p.assists * 3);
+    const raw =
+      p.potential * 0.28 +
+      p.aiScore * 0.28 +
+      (100 - p.injuryRisk) * 0.12 +
+      budgetFit * 0.07 +
+      production * 0.05 +
+      (p.speed + p.passing) * 0.1 +
+      priorityBonus +
+      workflowBonus;
+    return Math.min(98, Math.max(55, Math.round(raw)));
+  }
+
+  private buildRecommendationReasons(p: {
+    potential: number;
+    aiScore: number;
+    speed: number;
+    passing: number;
+    goals: number;
+    assists: number;
+    status: string;
+    agent?: string;
+    contractEnd: string;
+    injuryRisk: number;
+    valueMK: number;
+  }): string[] {
+    const reasons: string[] = [];
+    if (p.potential >= 85) reasons.push(`Potentiel ${p.potential}/100 — profil elite`);
+    else if (p.potential >= 78) reasons.push(`Potentiel solide ${p.potential}/100`);
+    if (p.goals >= 8) reasons.push(`${p.goals} buts · efficacité offensive`);
+    else if (p.assists >= 8) reasons.push(`${p.assists} passes D · création`);
+    if (p.speed >= 85) reasons.push(`Vitesse ${p.speed}/100`);
+    if (p.passing >= 85) reasons.push(`Vision ${p.passing}/100`);
+    if (p.status === 'validation' || p.status === 'signature') reasons.push('Pipeline avancé — prêt décision');
+    if (!p.agent) reasons.push('Sans agent — négociation directe');
+    if (p.valueMK <= 1000) reasons.push(`Budget maîtrisé ${p.valueMK >= 1000 ? (p.valueMK / 1000).toFixed(1) + 'M' : p.valueMK + 'K'} €`);
+    if (reasons.length === 0) reasons.push(`Score IA ${p.aiScore} · contrat ${p.contractEnd}`);
+    return reasons.slice(0, 3);
+  }
+
+  private buildRuleBasedRecommendations(
+    formatted: {
+      id: string;
+      name: string;
+      position: string;
+      age: number;
+      club: string;
+      flag: string;
+      marketValue: string;
+      potential: number;
+      aiScore: number;
+      injuryRisk: number;
+      valueMK: number;
+      priority: string;
+      status: string;
+      speed: number;
+      passing: number;
+      goals: number;
+      assists: number;
+      agent?: string;
+      contractEnd: string;
+    }[],
+  ) {
+    return [...formatted]
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        pos: p.position,
+        age: p.age,
+        club: p.club,
+        flag: p.flag,
+        score: this.computeRecruitmentScore(p),
+        budget: p.marketValue,
+        reasons: this.buildRecommendationReasons(p),
+        warn:
+          p.injuryRisk > 25
+            ? `Risque blessure ${p.injuryRisk}%`
+            : p.status === 'new'
+              ? 'Encore en phase observation'
+              : undefined,
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3);
+  }
+
+  private buildPipelineTrend(
+    formatted: { addedDate: string; status: string }[],
+  ) {
     const now = new Date();
     const points: { month: string; prospects: number; validated: number }[] = [];
     for (let i = 5; i >= 0; i--) {
       const monthEnd = new Date(now.getFullYear(), now.getMonth() - i + 1, 0, 23, 59, 59, 999);
       const monthLabel = this.monthLabels[monthEnd.getMonth()];
-      const cumProspects = prospects.filter((p) => p.createdAt <= monthEnd).length;
-      const validated = prospects.filter((p) => {
-        const wf = STATUS_TO_WORKFLOW[p.status];
-        return (wf === 'done' || wf === 'signature') && p.createdAt <= monthEnd;
-      }).length;
+      const monthEndStr = monthEnd.toISOString().split('T')[0];
+      const cumProspects = formatted.filter((p) => p.addedDate <= monthEndStr).length;
+      const validated = formatted.filter(
+        (p) =>
+          p.addedDate <= monthEndStr &&
+          (p.status === 'done' || p.status === 'signature'),
+      ).length;
       points.push({ month: monthLabel, prospects: cumProspects, validated });
     }
     return points;
   }
 
+  private buildInProgressTrend(formatted: { addedDate: string; status: string }[]) {
+    const now = new Date();
+    const counts: number[] = [];
+    for (let i = 5; i >= 0; i--) {
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() - i + 1, 0, 23, 59, 59, 999);
+      const monthEndStr = monthEnd.toISOString().split('T')[0];
+      counts.push(
+        formatted.filter(
+          (p) => p.addedDate <= monthEndStr && p.status !== 'done',
+        ).length,
+      );
+    }
+    return counts;
+  }
+
   private countSince<T extends { createdAt: Date }>(items: T[], since: Date) {
     return items.filter((i) => i.createdAt >= since).length;
+  }
+
+  private buildMonthlyCounts<T extends { createdAt: Date }>(items: T[]) {
+    const now = new Date();
+    const counts: number[] = [];
+    for (let i = 5; i >= 0; i--) {
+      const monthStart = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() - i + 1, 0, 23, 59, 59, 999);
+      counts.push(items.filter((p) => p.createdAt >= monthStart && p.createdAt <= monthEnd).length);
+    }
+    return counts;
+  }
+
+  private buildMonthlyValidations(formatted: { addedDate: string; status: string }[]) {
+    const now = new Date();
+    const counts: number[] = [];
+    for (let i = 5; i >= 0; i--) {
+      const monthStart = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() - i + 1, 0, 23, 59, 59, 999);
+      const startStr = monthStart.toISOString().split('T')[0];
+      const endStr = monthEnd.toISOString().split('T')[0];
+      counts.push(
+        formatted.filter(
+          (p) =>
+            p.addedDate >= startStr &&
+            p.addedDate <= endStr &&
+            (p.status === 'done' || p.status === 'signature'),
+        ).length,
+      );
+    }
+    return counts;
   }
 
   async getDashboard(user: JwtPayload) {
@@ -431,7 +700,11 @@ export class ScoutService {
         orderBy: { createdAt: 'desc' },
       }),
       this.prisma.clubCalendarEvent.findMany({
-        where: { organizationId, eventType: 'SCOUT' },
+        where: {
+          organizationId,
+          eventType: 'SCOUT',
+          eventDate: { gte: new Date(new Date().setHours(0, 0, 0, 0)) },
+        },
         orderBy: { eventDate: 'asc' },
         take: 5,
       }),
@@ -459,25 +732,7 @@ export class ScoutService {
       done: formatted.filter((p) => p.status === 'done').length,
     };
 
-    const aiRecs = [...formatted]
-      .sort((a, b) => b.aiScore - a.aiScore)
-      .slice(0, 3)
-      .map((p) => ({
-        id: p.id,
-        name: p.name,
-        pos: p.position,
-        age: p.age,
-        club: p.club,
-        flag: p.flag,
-        score: p.aiScore,
-        budget: p.marketValue,
-        reasons: [
-          `Potentiel ${p.potential}/100`,
-          `Score IA ${p.aiScore}`,
-          p.agent ? `Agent: ${p.agent}` : 'Négociation directe possible',
-        ],
-        warn: p.injuryRisk > 25 ? `Risque blessure ${p.injuryRisk}%` : undefined,
-      }));
+    const aiRecs = this.buildRuleBasedRecommendations(formatted);
 
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -493,13 +748,25 @@ export class ScoutService {
       C: formatted.filter((p) => p.priority === 'C').length,
     };
 
-    const pipelineTrend = this.buildPipelineTrend(prospects);
+    const pipelineTrend = this.buildPipelineTrend(formatted);
     const sparkProspects = pipelineTrend.map((p) => p.prospects);
-    const sparkValidated = pipelineTrend.map((p) => p.validated);
+    const sparkValidated = this.buildMonthlyValidations(formatted);
+    const sparkReports = this.buildMonthlyCounts(reports);
+    const sparkInProgress = this.buildInProgressTrend(formatted);
+
+    const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+    const priorityABudgetLastMonth = formatted
+      .filter((p) => p.priority === 'A' && prospects.find((pr) => pr.id === p.id && pr.createdAt <= endOfLastMonth))
+      .reduce((a, p) => a + p.valueMK, 0);
+    const priorityABudgetNow = formatted
+      .filter((p) => p.priority === 'A')
+      .reduce((a, p) => a + p.valueMK, 0);
 
     return {
       clubName: org?.clubName ?? 'Club',
-      season: `${now.getFullYear()}-${now.getFullYear() + 1}`,
+      season: isManchesterUnitedOrg(org?.clubName)
+        ? MANCHESTER_UNITED_2026_2027.season
+        : this.footballSeason(now),
       kpis: {
         totalProspects: formatted.length,
         watchlistCount: watchlist.length,
@@ -508,11 +775,18 @@ export class ScoutService {
         inProgress,
         prospectsThisMonth: this.countSince(prospects, startOfMonth),
         reportsThisMonth: this.countSince(reports, startOfMonth),
-        validationsThisMonth: reports.filter(
-          (r) =>
-            r.createdAt >= startOfMonth &&
-            /valid|recommand|sign|short/i.test(r.decision ?? ''),
-        ).length,
+        validationsThisMonth: Math.max(
+          reports.filter(
+            (r) =>
+              r.createdAt >= startOfMonth &&
+              /valid|recommand|sign|short|positif|oui/i.test(r.decision ?? ''),
+          ).length,
+          formatted.filter(
+            (p) =>
+              (p.status === 'done' || p.status === 'signature') &&
+              p.addedDate >= startOfMonth.toISOString().split('T')[0],
+          ).length,
+        ),
         avgPotential:
           formatted.length > 0
             ? Math.round((formatted.reduce((a, p) => a + p.potential, 0) / formatted.length) * 10) / 10
@@ -521,27 +795,26 @@ export class ScoutService {
           formatted.length > 0
             ? Math.round((formatted.reduce((a, p) => a + p.age, 0) / formatted.length) * 10) / 10
             : 0,
-        priorityABudget: formatted
-          .filter((p) => p.priority === 'A')
-          .reduce((a, p) => a + p.valueMK, 0),
+        priorityABudget: priorityABudgetNow,
+        budgetDeltaMK: Math.round((priorityABudgetNow - priorityABudgetLastMonth) / 100) / 10,
       },
       sparklines: {
         prospects: sparkProspects,
-        reports: sparkProspects.map((_, i) =>
-          Math.max(1, Math.round((reports.length * (i + 1)) / 6)),
-        ),
+        reports: sparkReports,
         validations: sparkValidated,
-        inProgress: sparkProspects.map((_, i) =>
-          Math.max(0, Math.round((inProgress * (i + 1)) / 6)),
-        ),
+        inProgress: sparkInProgress,
       },
-      byPosition: Object.entries(byPos).map(([name, v]) => ({ name, v })),
-      byCountry: Object.entries(byCountry).map(([name, value]) => ({ name, value })),
+      byPosition: Object.entries(byPos)
+        .map(([name, v]) => ({ name, v }))
+        .sort((a, b) => b.v - a.v),
+      byCountry: Object.entries(byCountry)
+        .map(([name, value]) => ({ name, value }))
+        .sort((a, b) => b.value - a.value),
       workflowCounts,
       priorityCounts,
       pipelineTrend,
       aiRecs,
-      recentReports: reports.map((r) => ({
+      recentReports: reports.slice(0, 10).map((r) => ({
         id: r.id,
         prospectName: r.prospectName,
         aiScore: r.aiScore,

@@ -23,12 +23,12 @@ export class ScoutController {
     try {
       const aiRecs = await this.scoutAi.getDashboardRecommendations(user);
       if (aiRecs?.length) {
-        return { ...dashboard, aiRecs, aiPowered: true };
+        return { ...dashboard, aiRecs, aiPowered: true, recSource: 'openai' as const };
       }
     } catch {
-      /* fallback recs déjà dans dashboard */
+      /* fallback rule-based recs from dashboard */
     }
-    return { ...dashboard, aiPowered: false };
+    return { ...dashboard, aiPowered: false, recSource: 'rules' as const };
   }
 
   @Get('prospects')
