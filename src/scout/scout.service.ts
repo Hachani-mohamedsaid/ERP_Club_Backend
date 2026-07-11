@@ -10,6 +10,7 @@ import {
   type ScoutDatasetBundle,
 } from './data/manchester-united-2026-2027.dataset';
 import { resolvePlayerPhoto, resolvePlayerPhotoAsync } from './data/player-photos';
+import { normPlayerName } from './data/player-primary-club';
 import { CalendarEventType, Prisma, RecruitmentStatus } from '@prisma/client';
 import { JwtPayload } from '../auth/jwt-payload.interface';
 import { ClubAccessService } from '../club/club-access.service';
@@ -605,6 +606,7 @@ export class ScoutService {
       assists: number;
       agent?: string;
       contractEnd: string;
+      photoUrl?: string;
     }[],
   ) {
     return [...formatted]
@@ -615,6 +617,7 @@ export class ScoutService {
         age: p.age,
         club: p.club,
         flag: p.flag,
+        photoUrl: p.photoUrl,
         score: this.computeRecruitmentScore(p),
         budget: p.marketValue,
         reasons: this.buildRecommendationReasons(p),
@@ -703,6 +706,7 @@ export class ScoutService {
     return this.withScoutDb(async () => {
     const organizationId = this.orgId(user);
     await this.ensureSeed(organizationId, user.fullName);
+    await this.ensureProspectPhotos(organizationId);
 
     const [prospects, watchlist, reports, missions, org] = await Promise.all([
       this.prisma.recruitmentProspect.findMany({ where: { organizationId } }),
@@ -846,6 +850,82 @@ export class ScoutService {
     });
   }
 
+  private pickPreferredProspect<
+    T extends { id: string; fullName: string; potential: number; scoutExtra: unknown; createdAt: Date },
+  >(a: T, b: T): T {
+    const exA = this.extra(a);
+    const exB = this.extra(b);
+    const aTagged = typeof exA.seasonTag === 'string';
+    const bTagged = typeof exB.seasonTag === 'string';
+    if (aTagged && !bTagged) return a;
+    if (bTagged && !aTagged) return b;
+    const aPhoto = typeof exA.photoUrl === 'string';
+    const bPhoto = typeof exB.photoUrl === 'string';
+    if (aPhoto && !bPhoto) return a;
+    if (bPhoto && !aPhoto) return b;
+    if (a.potential !== b.potential) return a.potential >= b.potential ? a : b;
+    return a.createdAt <= b.createdAt ? a : b;
+  }
+
+  /** Supprime les fiches doublons (même nom) — garde la fiche la plus complète. */
+  private async dedupeProspectsInOrg(organizationId: string) {
+    const rows = await this.prisma.recruitmentProspect.findMany({
+      where: { organizationId },
+    });
+    if (rows.length <= 1) return;
+
+    const groups = new Map<string, typeof rows>();
+    for (const row of rows) {
+      const key = normPlayerName(row.fullName);
+      const group = groups.get(key) ?? [];
+      group.push(row);
+      groups.set(key, group);
+    }
+
+    for (const group of groups.values()) {
+      if (group.length <= 1) continue;
+
+      let keep = group[0];
+      for (let i = 1; i < group.length; i++) {
+        keep = this.pickPreferredProspect(keep, group[i]);
+      }
+
+      for (const dup of group) {
+        if (dup.id === keep.id) continue;
+
+        const wl = await this.prisma.scoutWatchlist.findUnique({
+          where: { organizationId_prospectId: { organizationId, prospectId: dup.id } },
+        });
+        if (wl) {
+          const keepWl = await this.prisma.scoutWatchlist.findUnique({
+            where: { organizationId_prospectId: { organizationId, prospectId: keep.id } },
+          });
+          if (!keepWl) {
+            await this.prisma.scoutWatchlist.update({
+              where: { id: wl.id },
+              data: { prospectId: keep.id },
+            });
+          } else {
+            await this.prisma.scoutWatchlist.delete({ where: { id: wl.id } });
+          }
+        }
+
+        await this.prisma.scoutReport.updateMany({
+          where: { organizationId, prospectId: dup.id },
+          data: { prospectId: keep.id },
+        });
+
+        await this.prisma.recruitmentProspect.delete({ where: { id: dup.id } });
+      }
+    }
+  }
+
+  private async findProspectByName(organizationId: string, fullName: string) {
+    const key = normPlayerName(fullName);
+    const rows = await this.prisma.recruitmentProspect.findMany({ where: { organizationId } });
+    return rows.find((r) => normPlayerName(r.fullName) === key) ?? null;
+  }
+
   private async ensureProspectPhotos(organizationId: string) {
     const rows = await this.prisma.recruitmentProspect.findMany({
       where: { organizationId },
@@ -873,6 +953,7 @@ export class ScoutService {
     return this.withScoutDb(async () => {
       const organizationId = this.orgId(user);
       await this.ensureSeed(organizationId, user.fullName);
+      await this.dedupeProspectsInOrg(organizationId);
       await this.ensureProspectPhotos(organizationId);
 
       const [prospects, watchlist] = await Promise.all([
@@ -906,6 +987,14 @@ export class ScoutService {
     const organizationId = this.orgId(user);
     const fullName = String(data.name ?? data.fullName ?? '').trim();
     if (!fullName) throw new BadRequestException('Nom requis.');
+
+    const existing = await this.findProspectByName(organizationId, fullName);
+    if (existing) {
+      const watch = await this.prisma.scoutWatchlist.findUnique({
+        where: { organizationId_prospectId: { organizationId, prospectId: existing.id } },
+      });
+      return this.formatProspect(existing, watch ?? undefined);
+    }
 
     const scoutExtra: ScoutExtra = {
       flag: data.flag ?? '🏳️',
