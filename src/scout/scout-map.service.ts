@@ -16,7 +16,12 @@ import {
   type GeoTeam,
 } from './data/scout-geo-catalog';
 import { rosterTeamId } from './data/league-rosters';
-import { resolveFlashscoreSquad, hasCuratedFlashscoreSquad, filterDepartedPlayers } from './data/flashscore-squads';
+import {
+  resolveFlashscoreSquad,
+  hasCuratedFlashscoreSquad,
+  filterDepartedPlayers,
+} from './data/flashscore-squads';
+import { resolvePlayerPhoto } from './data/player-photos';
 
 type SquadPlayer = {
   id: string;
@@ -31,6 +36,7 @@ type SquadPlayer = {
   source: 'prospect' | 'flashscore' | 'ai';
   inDatabase?: boolean;
   prospectId?: string;
+  photoUrl?: string;
 };
 
 type SquadCache = Record<string, { players: SquadPlayer[]; generatedAt: string; source?: 'live' | 'flashscore' }>;
@@ -399,6 +405,7 @@ Règles: liste COMPLÈTE (16-20 clubs), noms réels, saison 2024-25.`,
       marketValue: p.marketValue,
       source: 'flashscore' as const,
       inDatabase: false,
+      photoUrl: resolvePlayerPhoto(p.name) ?? undefined,
     }));
   }
 

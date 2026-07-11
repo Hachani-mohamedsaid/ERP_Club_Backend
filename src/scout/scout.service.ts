@@ -9,6 +9,7 @@ import {
   MU_SEASON_TAG,
   type ScoutDatasetBundle,
 } from './data/manchester-united-2026-2027.dataset';
+import { resolvePlayerPhoto, resolvePlayerPhotoAsync } from './data/player-photos';
 import { CalendarEventType, Prisma, RecruitmentStatus } from '@prisma/client';
 import { JwtPayload } from '../auth/jwt-payload.interface';
 import { ClubAccessService } from '../club/club-access.service';
@@ -373,6 +374,14 @@ export class ScoutService {
       mental: typeof ex.mental === 'number' ? ex.mental : 70,
       contractEnd: typeof ex.contractEnd === 'string' ? ex.contractEnd : '2027-06',
       agent: typeof ex.agent === 'string' ? ex.agent : undefined,
+      photoUrl:
+        typeof ex.photoUrl === 'string'
+          ? ex.photoUrl
+          : resolvePlayerPhoto(p.fullName) ?? undefined,
+      season:
+        typeof ex.seasonTag === 'string' && ex.seasonTag.includes('2026')
+          ? '2026-2027'
+          : undefined,
       addedDate: p.createdAt.toISOString().split('T')[0],
       notes: watchlistNotes,
       inWatchlist: Boolean(watchlist),
@@ -407,6 +416,9 @@ export class ScoutService {
     dataset: ScoutDatasetBundle,
   ) {
     for (const seed of dataset.prospects) {
+      const photoUrl =
+        (typeof seed.scoutExtra.photoUrl === 'string' ? seed.scoutExtra.photoUrl : null) ??
+        resolvePlayerPhoto(seed.fullName);
       await this.prisma.recruitmentProspect.create({
         data: {
           organizationId,
@@ -419,7 +431,7 @@ export class ScoutService {
           score: seed.score,
           status: seed.status,
           scoutName,
-          scoutExtra: seed.scoutExtra as Prisma.InputJsonValue,
+          scoutExtra: { ...seed.scoutExtra, ...(photoUrl ? { photoUrl } : {}) } as Prisma.InputJsonValue,
           createdAt: new Date(seed.createdAt),
         },
       });
@@ -834,10 +846,34 @@ export class ScoutService {
     });
   }
 
+  private async ensureProspectPhotos(organizationId: string) {
+    const rows = await this.prisma.recruitmentProspect.findMany({
+      where: { organizationId },
+      select: { id: true, fullName: true, scoutExtra: true },
+    });
+
+    for (const row of rows) {
+      const ex = this.extra(row);
+      if (typeof ex.photoUrl === 'string' && ex.photoUrl.startsWith('http')) continue;
+
+      const photoUrl =
+        resolvePlayerPhoto(row.fullName) ?? (await resolvePlayerPhotoAsync(row.fullName));
+      if (!photoUrl) continue;
+
+      await this.prisma.recruitmentProspect.update({
+        where: { id: row.id },
+        data: {
+          scoutExtra: { ...ex, photoUrl } as Prisma.InputJsonValue,
+        },
+      });
+    }
+  }
+
   async listProspects(user: JwtPayload) {
     return this.withScoutDb(async () => {
       const organizationId = this.orgId(user);
       await this.ensureSeed(organizationId, user.fullName);
+      await this.ensureProspectPhotos(organizationId);
 
       const [prospects, watchlist] = await Promise.all([
         this.prisma.recruitmentProspect.findMany({

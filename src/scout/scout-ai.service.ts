@@ -11,6 +11,7 @@ import {
   SCOUT_SEASON,
   type FlashscoreSearchPlayer,
 } from './data/flashscore-search-pool';
+import { resolvePlayerPhoto } from './data/player-photos';
 
 @Injectable()
 export class ScoutAiService {
@@ -572,6 +573,7 @@ Règles:
       inDatabase: false,
       source: 'flashscore' as const,
       season: SCOUT_SEASON,
+      photoUrl: resolvePlayerPhoto(p.name) ?? undefined,
     };
   }
 
