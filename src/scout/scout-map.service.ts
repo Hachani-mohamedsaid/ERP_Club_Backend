@@ -16,6 +16,7 @@ import {
   type GeoTeam,
 } from './data/scout-geo-catalog';
 import { rosterTeamId } from './data/league-rosters';
+import { resolveFlashscoreSquad } from './data/flashscore-squads';
 
 type SquadPlayer = {
   id: string;
@@ -27,7 +28,7 @@ type SquadPlayer = {
   potential: number;
   currentRating: number;
   marketValue: string;
-  source: 'prospect' | 'ai';
+  source: 'prospect' | 'flashscore' | 'ai';
   inDatabase?: boolean;
   prospectId?: string;
 };
@@ -321,9 +322,16 @@ Règles: liste COMPLÈTE (16-20 clubs), noms réels, saison 2024-25.`,
 
     const teams = allTeams.map((t) => {
       const dbCount = this.countProspectsForTeam(prospects, t.name);
+      const fsCount = resolveFlashscoreSquad(
+        t.id,
+        t.name,
+        t.countryId,
+        country.name,
+        t.avgPotential,
+      ).length;
       return {
         ...t,
-        playerCount: dbCount || Math.max(3, Math.round(t.avgPotential / 15)),
+        playerCount: fsCount || dbCount || Math.max(3, Math.round(t.avgPotential / 15)),
         dbProspects: dbCount,
       };
     });
@@ -368,6 +376,26 @@ Règles: liste COMPLÈTE (16-20 clubs), noms réels, saison 2024-25.`,
     }));
   }
 
+  private mapFlashscoreToSquad(
+    teamId: string,
+    players: ReturnType<typeof resolveFlashscoreSquad>,
+    countryFlag: string,
+  ): SquadPlayer[] {
+    return players.map((p, i) => ({
+      id: `${teamId}-fs-${i}`,
+      name: p.name,
+      position: p.position,
+      age: p.age,
+      nationality: p.nationality,
+      flag: countryFlag,
+      potential: p.potential,
+      currentRating: p.currentRating,
+      marketValue: p.marketValue,
+      source: 'flashscore' as const,
+      inDatabase: false,
+    }));
+  }
+
   async getTeamSquad(user: JwtPayload, teamId: string, refresh = false) {
     const team = await this.resolveTeam(teamId);
     if (!team) throw new NotFoundException('Équipe introuvable.');
@@ -378,6 +406,38 @@ Règles: liste COMPLÈTE (16-20 clubs), noms réels, saison 2024-25.`,
     const dbPlayers = prospects
       .filter((p) => matchClubName(p.club, team.name))
       .map((p) => this.mapProspectToSquadPlayer(p));
+
+    const flashscoreSeeds = resolveFlashscoreSquad(
+      teamId,
+      team.name,
+      team.countryId,
+      country.name,
+      team.avgPotential,
+    );
+    const flashscorePlayers = this.mapFlashscoreToSquad(
+      teamId,
+      flashscoreSeeds,
+      country.flag,
+    );
+
+    if (flashscorePlayers.length > 0) {
+      const merged = this.mergeSquad(dbPlayers, flashscorePlayers);
+      if (refresh) {
+        await this.saveSquadCache(teamId, flashscorePlayers);
+      }
+      return {
+        team: { ...team, country },
+        players: merged,
+        sources: {
+          database: dbPlayers.length,
+          flashscore: flashscorePlayers.length,
+          ai: 0,
+        },
+        dataSource: 'flashscore',
+        season: '2026-2027',
+        cached: false,
+      };
+    }
 
     const cache = await this.getSquadCache();
     const cached = cache[teamId];
