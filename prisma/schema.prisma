@@ -69,6 +69,8 @@ model Organization {
   wellnessEntries  WellnessEntry[]
   recoverySessions RecoverySession[]
   prepNotifications PrepNotification[]
+  recruteurNotifications RecruteurNotification[]
+  recruteurAuditLogs RecruteurAuditLog[]
   sponsors         ClubSponsor[]
   invoices         ClubInvoice[]
   authUsers        User[]                    @relation("OrganizationMembers")
@@ -775,4 +777,53 @@ model PrepNotification {
 
   @@unique([organizationId, sourceType, sourceId])
   @@index([organizationId])
+}
+
+model RecruteurNotification {
+  id             String       @id @default(uuid())
+  organizationId String
+  type           String
+  title          String
+  body           String
+  priority       String       @default("medium")
+  isRead         Boolean      @default(false)
+  player         String?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+model RecruteurAuditLog {
+  id             String                @id @default(uuid())
+  organizationId String
+  userName       String
+  userRole       String
+  action         RecruteurAuditAction
+  description    String
+  player         String?
+  ipAddress      String?
+  severity       RecruteurAuditSeverity @default(INFO)
+  createdAt      DateTime              @default(now())
+  organization   Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+enum RecruteurAuditAction {
+  VALIDATION
+  OFFRE
+  CONTRAT
+  TRANSFERT
+  MODIFICATION
+  CREATION
+  SUPPRESSION
+  CONNEXION
+}
+
+enum RecruteurAuditSeverity {
+  INFO
+  SUCCESS
+  WARNING
+  CRITICAL
 }

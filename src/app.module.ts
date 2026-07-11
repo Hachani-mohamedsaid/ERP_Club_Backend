@@ -9,6 +9,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { UsersModule } from './users/users.module';
 import { PlatformModule } from './platform/platform.module';
 import { AnalysteModule } from './analyste/analyste.module';
+import { RecruteurModule } from './recruteur/recruteur.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { AnalysteModule } from './analyste/analyste.module';
     UsersModule,
     PlatformModule,
     AnalysteModule,
+    RecruteurModule,
   ],
   controllers: [AppController],
   providers: [AppService],
