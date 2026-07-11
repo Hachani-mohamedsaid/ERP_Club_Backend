@@ -396,23 +396,48 @@ export class ScoutService {
     }
   }
 
+  private monthLabels = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Jun', 'Jul', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc'];
+
+  private buildPipelineTrend(prospects: { createdAt: Date; status: RecruitmentStatus }[]) {
+    const now = new Date();
+    const points: { month: string; prospects: number; validated: number }[] = [];
+    for (let i = 5; i >= 0; i--) {
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() - i + 1, 0, 23, 59, 59, 999);
+      const monthLabel = this.monthLabels[monthEnd.getMonth()];
+      const cumProspects = prospects.filter((p) => p.createdAt <= monthEnd).length;
+      const validated = prospects.filter((p) => {
+        const wf = STATUS_TO_WORKFLOW[p.status];
+        return (wf === 'done' || wf === 'signature') && p.createdAt <= monthEnd;
+      }).length;
+      points.push({ month: monthLabel, prospects: cumProspects, validated });
+    }
+    return points;
+  }
+
+  private countSince<T extends { createdAt: Date }>(items: T[], since: Date) {
+    return items.filter((i) => i.createdAt >= since).length;
+  }
+
   async getDashboard(user: JwtPayload) {
     return this.withScoutDb(async () => {
     const organizationId = this.orgId(user);
     await this.ensureSeed(organizationId, user.fullName);
 
-    const [prospects, watchlist, reports, missions] = await Promise.all([
+    const [prospects, watchlist, reports, missions, org] = await Promise.all([
       this.prisma.recruitmentProspect.findMany({ where: { organizationId } }),
       this.prisma.scoutWatchlist.findMany({ where: { organizationId } }),
       this.prisma.scoutReport.findMany({
         where: { organizationId },
         orderBy: { createdAt: 'desc' },
-        take: 10,
       }),
       this.prisma.clubCalendarEvent.findMany({
         where: { organizationId, eventType: 'SCOUT' },
         orderBy: { eventDate: 'asc' },
         take: 5,
+      }),
+      this.prisma.organization.findUnique({
+        where: { id: organizationId },
+        select: { clubName: true },
       }),
     ]);
 
@@ -454,12 +479,40 @@ export class ScoutService {
         warn: p.injuryRisk > 25 ? `Risque blessure ${p.injuryRisk}%` : undefined,
       }));
 
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const inProgress =
+      workflowCounts.new +
+      workflowCounts.analysis +
+      workflowCounts.validation +
+      workflowCounts.signature;
+
+    const priorityCounts = {
+      A: formatted.filter((p) => p.priority === 'A').length,
+      B: formatted.filter((p) => p.priority === 'B').length,
+      C: formatted.filter((p) => p.priority === 'C').length,
+    };
+
+    const pipelineTrend = this.buildPipelineTrend(prospects);
+    const sparkProspects = pipelineTrend.map((p) => p.prospects);
+    const sparkValidated = pipelineTrend.map((p) => p.validated);
+
     return {
+      clubName: org?.clubName ?? 'Club',
+      season: `${now.getFullYear()}-${now.getFullYear() + 1}`,
       kpis: {
         totalProspects: formatted.length,
         watchlistCount: watchlist.length,
         reportsCount: reports.length,
         validatedCount: workflowCounts.done + workflowCounts.signature,
+        inProgress,
+        prospectsThisMonth: this.countSince(prospects, startOfMonth),
+        reportsThisMonth: this.countSince(reports, startOfMonth),
+        validationsThisMonth: reports.filter(
+          (r) =>
+            r.createdAt >= startOfMonth &&
+            /valid|recommand|sign|short/i.test(r.decision ?? ''),
+        ).length,
         avgPotential:
           formatted.length > 0
             ? Math.round((formatted.reduce((a, p) => a + p.potential, 0) / formatted.length) * 10) / 10
@@ -472,9 +525,21 @@ export class ScoutService {
           .filter((p) => p.priority === 'A')
           .reduce((a, p) => a + p.valueMK, 0),
       },
+      sparklines: {
+        prospects: sparkProspects,
+        reports: sparkProspects.map((_, i) =>
+          Math.max(1, Math.round((reports.length * (i + 1)) / 6)),
+        ),
+        validations: sparkValidated,
+        inProgress: sparkProspects.map((_, i) =>
+          Math.max(0, Math.round((inProgress * (i + 1)) / 6)),
+        ),
+      },
       byPosition: Object.entries(byPos).map(([name, v]) => ({ name, v })),
       byCountry: Object.entries(byCountry).map(([name, value]) => ({ name, value })),
       workflowCounts,
+      priorityCounts,
+      pipelineTrend,
       aiRecs,
       recentReports: reports.map((r) => ({
         id: r.id,

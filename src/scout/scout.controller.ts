@@ -18,8 +18,17 @@ export class ScoutController {
   ) {}
 
   @Get('dashboard')
-  getDashboard(@CurrentUser() user: JwtPayload) {
-    return this.scout.getDashboard(user);
+  async getDashboard(@CurrentUser() user: JwtPayload) {
+    const dashboard = await this.scout.getDashboard(user);
+    try {
+      const aiRecs = await this.scoutAi.getDashboardRecommendations(user);
+      if (aiRecs?.length) {
+        return { ...dashboard, aiRecs, aiPowered: true };
+      }
+    } catch {
+      /* fallback recs déjà dans dashboard */
+    }
+    return { ...dashboard, aiPowered: false };
   }
 
   @Get('prospects')

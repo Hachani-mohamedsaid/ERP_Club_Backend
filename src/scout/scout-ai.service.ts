@@ -513,4 +513,117 @@ RÈGLES CRITIQUES:
       model: config.model,
     };
   }
+
+  /** Top 3 recommandations IA pour le dashboard scout (OpenAI si clé configurée). */
+  async getDashboardRecommendations(user: JwtPayload) {
+    const config = await this.resolveAiConfig();
+    if (!config.enabled || !config.apiKey) return null;
+
+    const [prospects, org] = await Promise.all([
+      this.scout.listProspects(user),
+      this.prisma.organization.findUnique({
+        where: { id: this.access.requireOrganization(user) },
+        select: { clubName: true, league: true, country: true },
+      }),
+    ]);
+
+    if (prospects.length === 0) return null;
+
+    const snapshot = prospects.slice(0, 50).map((p) => ({
+      id: p.id,
+      name: p.name,
+      position: p.position,
+      age: p.age,
+      club: p.club,
+      nationality: p.nationality,
+      potential: p.potential,
+      aiScore: p.aiScore,
+      marketValue: p.marketValue,
+      valueMK: p.valueMK,
+      priority: p.priority,
+      status: p.status,
+      injuryRisk: p.injuryRisk,
+      agent: p.agent,
+      speed: p.speed,
+      passing: p.passing,
+      goals: p.goals,
+      assists: p.assists,
+    }));
+
+    const raw = await this.callOpenAi(
+      config.apiKey,
+      config.model,
+      `Tu es ODIN AI Scout, directeur recrutement football.
+Analyse la base prospects du club et recommande les 3 meilleurs profils à prioriser MAINTENANT.
+Réponds UNIQUEMENT en JSON valide:
+{
+  "recommendations": [
+    {
+      "prospectId": "uuid obligatoire si dans DB",
+      "compatibility": 92,
+      "reasons": ["raison tactique 1", "raison financière 2", "raison timing 3"],
+      "warn": "alerte optionnelle ou null"
+    }
+  ]
+}
+Règles:
+- Exactement 3 recommandations triées par compatibility (85-98)
+- prospectId DOIT matcher un id du snapshot DB
+- reasons: 2-3 phrases courtes en français, spécifiques au joueur
+- warn: concurrence, blessure, contrat, agent — ou null`,
+      `Club: ${org?.clubName ?? 'Club'} (${org?.league ?? '—'}, ${org?.country ?? '—'})
+Snapshot prospects DB (${snapshot.length}):
+${JSON.stringify(snapshot)}
+
+Besoins typiques: renfort offensif jeune, valeur marché optimisée, profils prêts shortlist/signature.`,
+      1200,
+    );
+
+    let parsed: {
+      recommendations?: {
+        prospectId: string;
+        compatibility: number;
+        reasons: string[];
+        warn?: string | null;
+      }[];
+    } = {};
+
+    try {
+      parsed = JSON.parse(raw.replace(/```json\n?|\n?```/g, ''));
+    } catch {
+      return null;
+    }
+
+    const recs = (parsed.recommendations ?? [])
+      .map((r) => {
+        const p = prospects.find((x) => x.id === r.prospectId);
+        if (!p) return null;
+        return {
+          id: p.id,
+          name: p.name,
+          pos: p.position,
+          age: p.age,
+          club: p.club,
+          flag: p.flag,
+          score: Math.min(98, Math.max(55, r.compatibility ?? p.aiScore)),
+          budget: p.marketValue,
+          reasons: (r.reasons ?? []).slice(0, 3).filter(Boolean),
+          warn: r.warn ?? (p.injuryRisk > 25 ? `Risque blessure ${p.injuryRisk}%` : undefined),
+        };
+      })
+      .filter(Boolean) as {
+      id: string;
+      name: string;
+      pos: string;
+      age: number;
+      club: string;
+      flag: string;
+      score: number;
+      budget: string;
+      reasons: string[];
+      warn?: string;
+    }[];
+
+    return recs.length > 0 ? recs.slice(0, 3) : null;
+  }
 }
