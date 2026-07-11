@@ -4,6 +4,13 @@ import { ClubAccessService } from '../club/club-access.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScoutService } from './scout.service';
 import { TEAMS, COUNTRIES, CONTINENTS } from './data/scout-geo-catalog';
+import {
+  getFlashscoreSearchPool,
+  getFlashscoreSearchPoolStats,
+  normalizeSearchPosition,
+  SCOUT_SEASON,
+  type FlashscoreSearchPlayer,
+} from './data/flashscore-search-pool';
 
 @Injectable()
 export class ScoutAiService {
@@ -85,29 +92,33 @@ export class ScoutAiService {
         ? Math.round(this.aiResponseTimesMs.reduce((a, b) => a + b, 0) / this.aiResponseTimesMs.length)
         : null;
 
+    const poolStats = getFlashscoreSearchPoolStats();
+
     return {
       status,
       model: config.model,
       provider: config.provider,
       clubName: org?.clubName ?? 'Club',
       scoutName: user.fullName,
+      season: SCOUT_SEASON,
       summary: {
         prospects: prospects.length,
+        flashscorePlayers: poolStats.totalPlayers,
         continents: CONTINENTS.length,
         countries: COUNTRIES.length,
-        clubs: TEAMS.length,
+        clubs: poolStats.clubs,
         avgPotential:
           prospects.length > 0
             ? Math.round(prospects.reduce((s, p) => s + p.potential, 0) / prospects.length)
             : 0,
       },
       suggestedQueries: [
-        'Cherche un BU ≤21 ans, potentiel >85, budget <1.5M',
-        'Meilleur MC créateur en Afrique du Nord',
-        'DC rapide avec bon jeu aérien ≤24 ans',
-        'Ailier gauche technique contrat libre ou <1M',
-        'Top 3 profils immédiatement disponibles',
-        'Qui a le meilleur rapport potentiel / valeur ?',
+        'BU ≤21 ans potentiel >85 — Premier League 2026-27',
+        'MC créateur U23 disponible <2M €',
+        'DC rapide Ligue 1 saison 2026-27',
+        'Ailier gauche Flashscore pot. ≥82',
+        'Top 5 jeunes talents PL effectifs actuels',
+        'Meilleur rapport potentiel / valeur en base scout',
       ],
       avgResponseTime: avgMs != null ? `${(avgMs / 1000).toFixed(1)}s` : '—',
     };
@@ -119,18 +130,38 @@ export class ScoutAiService {
     if (!config.apiKey) throw new BadRequestException('Clé OpenAI manquante côté serveur.');
 
     const prospects = await this.scout.listProspects(user);
+    const pool = getFlashscoreSearchPool();
     const started = Date.now();
+    const today = new Date().toISOString().slice(0, 10);
+
+    const poolSnapshot = pool
+      .sort((a, b) => b.potential - a.potential)
+      .slice(0, 220)
+      .map((p) => ({
+        poolId: p.poolId,
+        name: p.name,
+        club: p.club,
+        league: p.league,
+        position: normalizeSearchPosition(p.position),
+        age: p.age,
+        potential: p.potential,
+        nationality: p.nationality,
+        marketValue: p.marketValue,
+        season: p.season,
+      }));
 
     const raw = await this.callOpenAi(
       config.apiKey,
       config.model,
-      `Tu es ODIN AI Scout, assistant recrutement football.
-Tu as accès à la base prospects du club ET au catalogue mondial (${TEAMS.length} clubs, ${COUNTRIES.length} pays).
+      `Tu es ODIN AI Scout, assistant recrutement football — saison ${SCOUT_SEASON}.
+Date: ${today}
+Tu DOIS recommander UNIQUEMENT des joueurs présents dans POOL_FLASHSCORE ou PROSPECTS_DB.
 Réponds UNIQUEMENT en JSON valide:
 {
   "text": "synthèse en français",
   "results": [
     {
+      "poolId": "id pool si Flashscore sinon null",
       "prospectId": "uuid si dans DB sinon null",
       "name": "Nom joueur",
       "club": "Club",
@@ -145,17 +176,18 @@ Réponds UNIQUEMENT en JSON valide:
   ]
 }
 Règles:
-- Prioriser les prospects RÉELS du snapshot DB (prospectId obligatoire si match)
-- Si aucun match exact, proposer les plus proches avec avertissement
-- Max 5 résultats triés par compatibility
-- compatibility 55-98`,
-      `PROSPECTS DB:\n${JSON.stringify(prospects.slice(0, 80))}\n\nCATALOGUE:\n${JSON.stringify({ continents: CONTINENTS.length, countries: COUNTRIES.map((c) => c.name), sampleTeams: TEAMS.slice(0, 30).map((t) => t.name) })}\n\nRequête scout: ${query}`,
-      1800,
+- Max 5 résultats triés par compatibility (55-98)
+- INTERDIT d'inventer un joueur absent des snapshots
+- Prioriser effectifs Flashscore ${SCOUT_SEASON} à jour
+- prospectId ou poolId obligatoire pour chaque résultat`,
+      `PROSPECTS DB (${SCOUT_SEASON}):\n${JSON.stringify(prospects.slice(0, 80))}\n\nPOOL_FLASHSCORE (${poolSnapshot.length} joueurs, ${SCOUT_SEASON}):\n${JSON.stringify(poolSnapshot)}\n\nRequête scout: ${query}`,
+      2200,
     );
 
     let parsed: {
       text?: string;
       results?: {
+        poolId?: string | null;
         prospectId?: string | null;
         name: string;
         club: string;
@@ -175,35 +207,94 @@ Règles:
       parsed = { text: raw, results: [] };
     }
 
-    const results = (parsed.results ?? []).map((r, i) => {
-      const dbMatch = r.prospectId
-        ? prospects.find((p) => p.id === r.prospectId)
-        : prospects.find(
-            (p) => p.name.toLowerCase() === r.name.toLowerCase() ||
-              (p.name.toLowerCase().includes(r.name.toLowerCase()) && p.club === r.club),
-          );
-      return {
-        id: dbMatch?.id ?? r.prospectId ?? `ai-${i}`,
-        rank: i + 1,
-        name: dbMatch?.name ?? r.name,
-        club: dbMatch?.club ?? r.club,
-        position: dbMatch?.position ?? r.position,
-        age: dbMatch?.age ?? r.age,
-        potential: dbMatch?.potential ?? r.potential,
-        flag: dbMatch?.flag ?? '🏳️',
-        aiScore: dbMatch?.aiScore ?? r.potential,
-        compatibility: r.compatibility,
-        reasoning: r.reasoning ?? [],
-        warnings: r.warnings ?? [],
-        recommendation: r.recommendation ?? 'À observer',
-        inDatabase: Boolean(dbMatch),
-      };
-    });
+    const results = (parsed.results ?? [])
+      .map((r, i) => {
+        const dbMatch = r.prospectId
+          ? prospects.find((p) => p.id === r.prospectId)
+          : prospects.find(
+              (p) =>
+                p.name.toLowerCase() === r.name.toLowerCase() ||
+                (p.name.toLowerCase().includes(r.name.toLowerCase()) && p.club === r.club),
+            );
+        const poolMatch = r.poolId
+          ? pool.find((p) => p.poolId === r.poolId)
+          : pool.find(
+              (p) =>
+                p.name.toLowerCase() === r.name.toLowerCase() &&
+                p.club.toLowerCase() === r.club.toLowerCase(),
+            );
+
+        if (!dbMatch && !poolMatch) return null;
+
+        return {
+          id: dbMatch?.id ?? poolMatch?.poolId ?? r.prospectId ?? `ai-${i}`,
+          rank: i + 1,
+          name: dbMatch?.name ?? poolMatch?.name ?? r.name,
+          club: dbMatch?.club ?? poolMatch?.club ?? r.club,
+          position: dbMatch?.position ?? normalizeSearchPosition(poolMatch?.position ?? r.position),
+          age: dbMatch?.age ?? poolMatch?.age ?? r.age,
+          potential: dbMatch?.potential ?? poolMatch?.potential ?? r.potential,
+          flag: dbMatch?.flag ?? this.nationalityFlag(poolMatch?.nationality ?? ''),
+          aiScore: dbMatch?.aiScore ?? poolMatch?.potential ?? r.potential,
+          compatibility: r.compatibility,
+          reasoning: r.reasoning ?? [],
+          warnings: r.warnings ?? [],
+          recommendation: r.recommendation ?? 'À observer',
+          inDatabase: Boolean(dbMatch),
+          source: dbMatch ? ('database' as const) : ('flashscore' as const),
+          season: SCOUT_SEASON,
+        };
+      })
+      .filter(Boolean) as {
+      id: string;
+      rank: number;
+      name: string;
+      club: string;
+      position: string;
+      age: number;
+      potential: number;
+      flag: string;
+      aiScore: number;
+      compatibility: number;
+      reasoning: string[];
+      warnings: string[];
+      recommendation: string;
+      inDatabase: boolean;
+      source: 'database' | 'flashscore';
+      season: string;
+    }[];
+
+    const fallbackResults =
+      results.length > 0
+        ? results
+        : this.rankPoolForQuery(pool, query)
+            .slice(0, 5)
+            .map((p, i) => ({
+              id: p.poolId,
+              rank: i + 1,
+              name: p.name,
+              club: p.club,
+              position: normalizeSearchPosition(p.position),
+              age: p.age,
+              potential: p.potential,
+              flag: this.nationalityFlag(p.nationality),
+              aiScore: p.potential,
+              compatibility: Math.min(92, p.potential + 2),
+              reasoning: [`Profil ${SCOUT_SEASON} Flashscore`, `${p.league} · Pot. ${p.potential}`],
+              warnings: [] as string[],
+              recommendation: 'Shortlist recommandée',
+              inDatabase: false,
+              source: 'flashscore' as const,
+              season: SCOUT_SEASON,
+            }));
 
     return {
       query,
-      text: parsed.text ?? '',
-      results,
+      text:
+        parsed.text ??
+        `${fallbackResults.length} profils ${SCOUT_SEASON} (Flashscore + base scout).`,
+      results: fallbackResults,
+      season: SCOUT_SEASON,
       durationMs: Date.now() - started,
       model: config.model,
     };
@@ -375,6 +466,115 @@ Règles:
     };
   }
 
+  private applyPoolFilters(
+    pool: FlashscoreSearchPlayer[],
+    filters: {
+      query?: string;
+      position?: string;
+      country?: string;
+      ageRange?: string;
+      potRange?: string;
+      budgetRange?: string;
+    },
+  ) {
+    const q = filters.query?.trim().toLowerCase();
+    return pool.filter((p) => {
+      const pos = normalizeSearchPosition(p.position);
+      if (q && !p.name.toLowerCase().includes(q) && !p.club.toLowerCase().includes(q) && !p.league.toLowerCase().includes(q)) {
+        return false;
+      }
+      if (filters.position && filters.position !== 'Tous' && pos !== filters.position) return false;
+      if (filters.country && filters.country !== 'Tous' && p.nationality !== filters.country) return false;
+      if (!this.matchesAge(p.age, filters.ageRange)) return false;
+      if (!this.matchesPot(p.potential, filters.potRange)) return false;
+      if (!this.matchesBudget(p.valueMK, filters.budgetRange)) return false;
+      return true;
+    });
+  }
+
+  private rankPoolForQuery(pool: FlashscoreSearchPlayer[], query: string) {
+    const q = query.toLowerCase();
+    const posHints: Record<string, string[]> = {
+      bu: ['BU'],
+      attaquant: ['BU'],
+      gardien: ['GK', 'GB'],
+      gb: ['GK', 'GB'],
+      dc: ['DC'],
+      défenseur: ['DC', 'DG', 'DD'],
+      mc: ['MC', 'MDC', 'MOC'],
+      milieu: ['MC', 'MDC', 'MOC'],
+      ailier: ['AG', 'AD', 'Ailier G', 'Ailier D'],
+    };
+
+    return [...pool].sort((a, b) => {
+      let scoreA = a.potential;
+      let scoreB = b.potential;
+      if (q.includes('≤21') || q.includes('<21') || q.includes('u21') || q.includes('jeune')) {
+        if (a.age <= 21) scoreA += 8;
+        if (b.age <= 21) scoreB += 8;
+      }
+      if (q.includes('>85') || q.includes('≥85') || q.includes('potentiel')) {
+        if (a.potential >= 85) scoreA += 5;
+        if (b.potential >= 85) scoreB += 5;
+      }
+      for (const [hint, positions] of Object.entries(posHints)) {
+        if (!q.includes(hint)) continue;
+        if (positions.includes(a.position) || positions.includes(normalizeSearchPosition(a.position))) scoreA += 10;
+        if (positions.includes(b.position) || positions.includes(normalizeSearchPosition(b.position))) scoreB += 10;
+      }
+      if (a.name.toLowerCase().includes(q) || a.club.toLowerCase().includes(q)) scoreA += 12;
+      if (b.name.toLowerCase().includes(q) || b.club.toLowerCase().includes(q)) scoreB += 12;
+      return scoreB - scoreA;
+    });
+  }
+
+  private mapPoolPlayerToProspect(p: FlashscoreSearchPlayer, index: number) {
+    const slug = p.name
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .slice(0, 40);
+    const attrs = Math.max(55, p.potential - 6);
+    return {
+      id: p.poolId || `fs-search-${slug || index}`,
+      name: p.name,
+      age: p.age,
+      nationality: p.nationality,
+      flag: this.nationalityFlag(p.nationality),
+      club: p.club,
+      league: p.league,
+      position: normalizeSearchPosition(p.position),
+      potential: p.potential,
+      currentRating: p.currentRating,
+      marketValue: p.marketValue,
+      valueMK: p.valueMK,
+      priority: p.potential >= 85 ? 'A' : p.potential >= 78 ? 'B' : 'C',
+      status: 'new',
+      aiScore: p.potential,
+      injuryRisk: 16,
+      foot: 'Droit',
+      height: 178,
+      weight: 72,
+      goals: 0,
+      assists: 0,
+      matches: 0,
+      speed: attrs + 4,
+      dribble: attrs,
+      passing: attrs,
+      defense: attrs - 4,
+      physical: attrs,
+      mental: attrs + 2,
+      contractEnd: '2027-06',
+      addedDate: new Date().toISOString().split('T')[0],
+      notes: [],
+      inWatchlist: false,
+      inDatabase: false,
+      source: 'flashscore' as const,
+      season: SCOUT_SEASON,
+    };
+  }
+
   async searchProspects(
     user: JwtPayload,
     filters: {
@@ -388,127 +588,57 @@ Règles:
   ) {
     const config = await this.resolveAiConfig();
     const allDb = await this.scout.listProspects(user);
+    const pool = getFlashscoreSearchPool();
+
     const dbFiltered = this.applyDbFilters(allDb, filters).map((p) => ({
       ...p,
       inDatabase: true,
       source: 'database' as const,
+      season: SCOUT_SEASON,
     }));
 
-    if (!config.enabled || !config.apiKey) {
-      return {
-        summary: 'Recherche locale (base club). Ajoutez OPENAI_API_KEY sur Render pour découvrir de vrais joueurs.',
-        results: dbFiltered,
-        aiEnabled: false,
-        sources: { database: dbFiltered.length, ai: 0 },
-        model: config.model,
-      };
-    }
+    const poolFiltered = this.applyPoolFilters(pool, filters).map((p, i) =>
+      this.mapPoolPlayerToProspect(p, i),
+    );
+
+    const dbKeys = new Set(dbFiltered.map((p) => `${p.name.toLowerCase()}|${p.club.toLowerCase()}`));
+    const poolUnique = poolFiltered.filter(
+      (p) => !dbKeys.has(`${p.name.toLowerCase()}|${p.club.toLowerCase()}`),
+    );
+
+    let merged = [...dbFiltered, ...poolUnique].sort((a, b) => b.potential - a.potential);
 
     const started = Date.now();
-    const filterDesc = this.describeFilters(filters);
-    const sampleTeams = TEAMS.slice(0, 40).map((t) => t.name).join(', ');
+    let summary = `Saison ${SCOUT_SEASON} · ${merged.length} joueur(s) — ${dbFiltered.length} scout · ${poolUnique.length} Flashscore`;
 
-    let aiPlayers: ReturnType<ScoutAiService['mapAiPlayerToProspect']>[] = [];
-
-    try {
-      const raw = await this.callOpenAi(
-        config.apiKey,
-        config.model,
-        `Tu es ODIN AI Scout, expert recrutement football mondial.
-Trouve des VRAIS joueurs professionnels actuels (saison 2024-25 ou la plus récente).
-Réponds UNIQUEMENT en JSON valide:
-{
-  "summary": "synthèse courte en français",
-  "players": [
-    {
-      "name": "Nom complet réel",
-      "club": "Club actuel réel",
-      "nationality": "Pays",
-      "position": "BU|MC|DC|DG|DD|Ailier G|GK",
-      "age": 20,
-      "potential": 82,
-      "currentRating": 76,
-      "marketValue": "800K €",
-      "valueMK": 800,
-      "aiScore": 80,
-      "injuryRisk": 15,
-      "foot": "Droit",
-      "height": 182,
-      "weight": 75,
-      "goals": 5,
-      "assists": 3,
-      "matches": 22,
-      "speed": 78,
-      "dribble": 75,
-      "passing": 72,
-      "defense": 65,
-      "physical": 74,
-      "mental": 76,
-      "contractEnd": "2027-06",
-      "league": "Championnat",
-      "priority": "A|B|C"
+    if (config.enabled && config.apiKey && merged.length > 0 && merged.length <= 40) {
+      try {
+        const raw = await this.callOpenAi(
+          config.apiKey,
+          config.model,
+          `Tu es ODIN AI Scout. Résume en 1-2 phrases en français les résultats de recherche football saison ${SCOUT_SEASON}.
+Réponds UNIQUEMENT en JSON: {"summary":"..."}`,
+          `Critères: ${this.describeFilters(filters)}\nRésultats (${merged.length}): ${JSON.stringify(merged.slice(0, 25).map((p) => ({ name: p.name, club: p.club, position: p.position, age: p.age, potential: p.potential })))}`,
+          400,
+        );
+        const parsed = JSON.parse(raw.replace(/```json\n?|\n?```/g, '')) as { summary?: string };
+        if (parsed.summary?.trim()) summary = `${parsed.summary.trim()} · ${SCOUT_SEASON}`;
+      } catch {
+        /* keep default summary */
+      }
+    } else if (merged.length === 0) {
+      merged = this.rankPoolForQuery(pool, filters.query ?? '')
+        .slice(0, 18)
+        .map((p, i) => this.mapPoolPlayerToProspect(p, i));
+      summary = `Aucun match exact — ${merged.length} suggestions Flashscore ${SCOUT_SEASON}`;
     }
-  ]
-}
-RÈGLES CRITIQUES:
-- UNIQUEMENT des joueurs RÉELS qui existent (pas de fiction, pas "Ali Messi")
-- 10 à 18 joueurs correspondant aux filtres
-- Noms officiels, clubs actuels vérifiables
-- Stats cohérentes avec le poste et l'âge
-- Prioriser Afrique, Maghreb, Ligue tunisienne si filtre pays africain`,
-        `CRITÈRES RECHERCHE:\n${filterDesc}\n\nPAYS DISPONIBLES: ${COUNTRIES.map((c) => c.name).join(', ')}\nCLUBS RÉFÉRENCE: ${sampleTeams}\n\nDÉJÀ EN BASE (éviter doublons sauf si pertinent):\n${JSON.stringify(dbFiltered.slice(0, 15).map((p) => ({ name: p.name, club: p.club })))}`,
-        3800,
-      );
-
-      const parsed = JSON.parse(raw.replace(/```json\n?|\n?```/g, '')) as {
-        summary?: string;
-        players?: {
-          name: string;
-          club: string;
-          nationality: string;
-          position: string;
-          age: number;
-          potential: number;
-          currentRating?: number;
-          marketValue?: string;
-          valueMK?: number;
-          aiScore?: number;
-          injuryRisk?: number;
-          foot?: string;
-          height?: number;
-          weight?: number;
-          goals?: number;
-          assists?: number;
-          matches?: number;
-          speed?: number;
-          dribble?: number;
-          passing?: number;
-          defense?: number;
-          physical?: number;
-          mental?: number;
-          contractEnd?: string;
-          league?: string;
-          priority?: string;
-        }[];
-      };
-
-      aiPlayers = (parsed.players ?? []).map((p, i) => this.mapAiPlayerToProspect(p, i));
-    } catch {
-      aiPlayers = [];
-    }
-
-    const dbNames = new Set(dbFiltered.map((p) => p.name.toLowerCase()));
-    const aiUnique = aiPlayers.filter((p) => !dbNames.has(p.name.toLowerCase()));
-    const merged = [...dbFiltered, ...aiUnique].sort((a, b) => b.potential - a.potential);
 
     return {
-      summary:
-        aiUnique.length > 0
-          ? `${merged.length} joueurs — ${dbFiltered.length} en base, ${aiUnique.length} découverts via OpenAI`
-          : `${dbFiltered.length} joueur(s) en base correspondant aux filtres`,
-      results: merged,
-      aiEnabled: true,
-      sources: { database: dbFiltered.length, ai: aiUnique.length },
+      summary,
+      results: merged.slice(0, 60),
+      aiEnabled: Boolean(config.apiKey && config.enabled),
+      season: SCOUT_SEASON,
+      sources: { database: dbFiltered.length, flashscore: poolUnique.length, ai: 0 },
       durationMs: Date.now() - started,
       model: config.model,
     };
