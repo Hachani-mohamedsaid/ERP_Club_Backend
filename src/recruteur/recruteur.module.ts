@@ -6,10 +6,12 @@ import { RecruteurService } from './recruteur.service';
 import { RecruteurNotificationsController } from './recruteur-notifications.controller';
 import { RecruteurNotificationsService } from './recruteur-notifications.service';
 import { RecruteurAuditService } from './recruteur-audit.service';
+import { RecruteurCalendarController } from './recruteur-calendar.controller';
+import { RecruteurCalendarService } from './recruteur-calendar.service';
 
 @Module({
   imports: [ClubModule, ScoutModule],
-  controllers: [RecruteurController, RecruteurNotificationsController],
-  providers: [RecruteurService, RecruteurNotificationsService, RecruteurAuditService],
+  controllers: [RecruteurController, RecruteurNotificationsController, RecruteurCalendarController],
+  providers: [RecruteurService, RecruteurNotificationsService, RecruteurAuditService, RecruteurCalendarService],
 })
 export class RecruteurModule {}
