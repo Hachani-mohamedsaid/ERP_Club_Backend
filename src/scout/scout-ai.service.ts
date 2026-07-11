@@ -11,7 +11,8 @@ import {
   SCOUT_SEASON,
   type FlashscoreSearchPlayer,
 } from './data/flashscore-search-pool';
-import { resolvePlayerPhoto } from './data/player-photos';
+import { resolvePlayerPhoto, enrichWithPlayerPhotos } from './data/player-photos';
+import { dedupePlayersByName } from './data/player-primary-club';
 
 @Injectable()
 export class ScoutAiService {
@@ -244,6 +245,10 @@ Règles:
           inDatabase: Boolean(dbMatch),
           source: dbMatch ? ('database' as const) : ('flashscore' as const),
           season: SCOUT_SEASON,
+          photoUrl:
+            dbMatch?.photoUrl ??
+            (poolMatch ? resolvePlayerPhoto(poolMatch.name) : resolvePlayerPhoto(r.name)) ??
+            undefined,
         };
       })
       .filter(Boolean) as {
@@ -287,6 +292,7 @@ Règles:
               inDatabase: false,
               source: 'flashscore' as const,
               season: SCOUT_SEASON,
+              photoUrl: resolvePlayerPhoto(p.name) ?? undefined,
             }));
 
     return {
@@ -608,7 +614,9 @@ Règles:
       (p) => !dbKeys.has(`${p.name.toLowerCase()}|${p.club.toLowerCase()}`),
     );
 
-    let merged = [...dbFiltered, ...poolUnique].sort((a, b) => b.potential - a.potential);
+    let merged = dedupePlayersByName(
+      [...dbFiltered, ...poolUnique].sort((a, b) => b.potential - a.potential),
+    );
 
     const started = Date.now();
     let summary = `Saison ${SCOUT_SEASON} · ${merged.length} joueur(s) — ${dbFiltered.length} scout · ${poolUnique.length} Flashscore`;
@@ -635,9 +643,12 @@ Réponds UNIQUEMENT en JSON: {"summary":"..."}`,
       summary = `Aucun match exact — ${merged.length} suggestions Flashscore ${SCOUT_SEASON}`;
     }
 
+    const results = merged.slice(0, 60);
+    await enrichWithPlayerPhotos(results, 48, 8);
+
     return {
       summary,
-      results: merged.slice(0, 60),
+      results,
       aiEnabled: Boolean(config.apiKey && config.enabled),
       season: SCOUT_SEASON,
       sources: { database: dbFiltered.length, flashscore: poolUnique.length, ai: 0 },
@@ -742,6 +753,7 @@ Besoins typiques: renfort offensif jeune, valeur marché optimisée, profils pr�
           flag: p.flag,
           score: Math.min(98, Math.max(55, r.compatibility ?? p.aiScore)),
           budget: p.marketValue,
+          photoUrl: (p as { photoUrl?: string }).photoUrl,
           reasons: (r.reasons ?? []).slice(0, 3).filter(Boolean),
           warn: r.warn ?? (p.injuryRisk > 25 ? `Risque blessure ${p.injuryRisk}%` : undefined),
         };
@@ -774,6 +786,7 @@ Besoins typiques: renfort offensif jeune, valeur marché optimisée, profils pr�
           flag: p.flag,
           score: p.aiScore,
           budget: p.marketValue,
+          photoUrl: p.photoUrl,
           reasons: [
             `Potentiel ${p.potential}/100`,
             `Score IA ${p.aiScore}`,

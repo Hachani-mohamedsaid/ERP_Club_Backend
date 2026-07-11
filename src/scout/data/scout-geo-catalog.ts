@@ -239,10 +239,44 @@ export function getTeam(id: string) {
 }
 
 export function matchClubName(prospectClub: string, teamName: string) {
-  const a = prospectClub.toLowerCase().trim();
-  const b = teamName.toLowerCase().trim();
+  const a = normClubLabel(prospectClub);
+  const b = normClubLabel(teamName);
   if (!a || !b) return false;
+  if (a === b) return true;
+
+  // Évite les faux positifs (ex. Atlético ≠ Real via "Madrid" seul)
+  const ambiguous = new Set(['madrid', 'city', 'united', 'dortmund', 'barcelona', 'barcelone']);
+  if (ambiguous.has(a) || ambiguous.has(b)) {
+    return CLUB_ALIAS_GROUPS.some((group) => group.includes(a) && group.includes(b));
+  }
+
   if (a.includes(b) || b.includes(a)) return true;
-  const lastWord = b.split(' ').pop() ?? '';
-  return lastWord.length > 3 && a.includes(lastWord);
+
+  return CLUB_ALIAS_GROUPS.some((group) => group.includes(a) && group.includes(b));
 }
+
+function normClubLabel(name: string) {
+  return name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+}
+
+const CLUB_ALIAS_GROUPS: string[][] = [
+  ['manchester united', 'man united', 'man utd', 'manchester utd', 'manu'],
+  ['manchester city', 'man city', 'city'],
+  ['paris sg', 'psg', 'paris saint-germain', 'paris saint germain'],
+  ['atletico madrid', 'atlético madrid', 'atletico'],
+  ['real madrid', 'real'],
+  ['athletic bilbao', 'athletic club', 'athletic'],
+  ['bayern munich', 'bayern', 'fc bayern'],
+  ['borussia dortmund', 'dortmund', 'bvb'],
+  ['newcastle united', 'newcastle'],
+  ['nottingham forest', 'nottm forest'],
+  ['tottenham', 'tottenham hotspur', 'spurs'],
+  ['west ham', 'west ham united'],
+  ['brighton', 'brighton hove albion'],
+  ['wolverhampton', 'wolves'],
+  ['leeds united', 'leeds'],
+];

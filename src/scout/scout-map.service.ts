@@ -540,7 +540,20 @@ Règles:
     if (isCurated) {
       rosterPlayers = staticPlayers;
       dataSource = 'flashscore';
-      if (refresh || !cached || hasLegacyAiCache || hasBadLiveCache || cached.source === 'live') {
+      const cachedNames = new Set(cached?.players.map((p) => p.name.toLowerCase()) ?? []);
+      const staticNames = staticPlayers.map((p) => p.name.toLowerCase());
+      const cacheMismatch =
+        Boolean(cached) &&
+        (cachedNames.size !== staticNames.length ||
+          staticNames.some((n) => !cachedNames.has(n)));
+      if (
+        refresh ||
+        !cached ||
+        hasLegacyAiCache ||
+        hasBadLiveCache ||
+        cached.source === 'live' ||
+        cacheMismatch
+      ) {
         await this.saveSquadCache(teamId, staticPlayers, 'flashscore');
         updatedAt = new Date().toISOString();
       } else if (cached && !cacheStale) {

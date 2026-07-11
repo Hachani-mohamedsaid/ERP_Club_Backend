@@ -4,7 +4,6 @@
  */
 
 import { normalizeClubName, rosterTeamId } from './league-rosters';
-import { matchClubName } from './scout-geo-catalog';
 
 export type FlashscorePlayerSeed = {
   name: string;
@@ -302,7 +301,22 @@ const SQUADS: SquadEntry[] = [
     ]),
   },
   {
-    keys: ['es-real-madrid', 'real madrid'],
+    keys: ['es-atletico-madrid', 'atletico madrid', 'atlético madrid', 'atm'],
+    players: pos.gb([
+      ['Jan Oblak', 'GB', 32, 'Slovénie', 88, 86, '25M €'],
+      ['José María Giménez', 'DC', 30, 'Uruguay', 85, 83, '28M €'],
+      ['Robin Le Normand', 'DC', 28, 'Espagne', 84, 82, '35M €'],
+      ['Marcos Llorente', 'MC', 30, 'Espagne', 85, 83, '40M €'],
+      ['Koke', 'MC', 33, 'Espagne', 84, 82, '15M €'],
+      ['Rodrigo De Paul', 'MC', 30, 'Argentine', 86, 84, '35M €'],
+      ['Antoine Griezmann', 'MOC', 34, 'France', 87, 85, '25M €'],
+      ['Julian Alvarez', 'BU', 25, 'Argentine', 89, 87, '90M €'],
+      ['Álvaro Morata', 'BU', 32, 'Espagne', 83, 81, '18M €'],
+      ['Samuel Lino', 'AG', 25, 'Brésil', 82, 80, '22M €'],
+    ]),
+  },
+  {
+    keys: ['es-real-madrid', 'real madrid', 'rm'],
     players: pos.gb([
       ['Thibaut Courtois', 'GB', 33, 'Belgique', 90, 88, '35M €'],
       ['Éder Militão', 'DC', 27, 'Brésil', 87, 85, '55M €'],
@@ -312,6 +326,27 @@ const SQUADS: SquadEntry[] = [
       ['Vinícius Jr', 'AG', 25, 'Brésil', 93, 91, '150M €'],
       ['Rodrygo', 'AD', 24, 'Brésil', 88, 86, '80M €'],
       ['Kylian Mbappé', 'BU', 27, 'France', 95, 93, '200M €'],
+    ]),
+  },
+  {
+    keys: ['es-villarreal', 'villarreal'],
+    players: pos.gb([
+      ['Gerónimo Rulli', 'GB', 32, 'Argentine', 82, 80, '8M €'],
+      ['Aïssa Mandi', 'DC', 33, 'Algérie', 81, 79, '6M €'],
+      ['Álex Baena', 'MOC', 24, 'Espagne', 86, 83, '45M €'],
+      ['Dani Parejo', 'MC', 36, 'Espagne', 83, 81, '6M €'],
+      ['Gerard Moreno', 'BU', 33, 'Espagne', 84, 82, '12M €'],
+      ['Nicolas Pepe', 'AD', 30, 'Côte d\'Ivoire', 82, 80, '18M €'],
+    ]),
+  },
+  {
+    keys: ['es-sevilla', 'sevilla'],
+    players: pos.gb([
+      ['Ørjan Nyland', 'GB', 34, 'Norvège', 78, 76, '4M €'],
+      ['Loïc Badé', 'DC', 24, 'France', 82, 80, '22M €'],
+      ['Suso', 'AD', 31, 'Espagne', 81, 79, '10M €'],
+      ['Lucas Ocampos', 'AG', 30, 'Argentine', 82, 80, '15M €'],
+      ['Isaac Romero', 'BU', 25, 'Espagne', 80, 78, '12M €'],
     ]),
   },
   {
@@ -404,25 +439,34 @@ function generateFallbackSquad(
   });
 }
 
+function squadKeysMatch(
+  teamId: string,
+  rosterId: string,
+  teamName: string,
+  entryKeys: string[],
+): boolean {
+  const idKey = teamId.toLowerCase();
+  const nameKey = teamName.toLowerCase();
+  const normalizedTeam = normalizeClubName(teamName);
+
+  return entryKeys.some((k) => {
+    const kl = k.toLowerCase();
+    return (
+      kl === idKey ||
+      kl === rosterId ||
+      kl === nameKey ||
+      normalizeClubName(k) === normalizedTeam
+    );
+  });
+}
+
 export function hasCuratedFlashscoreSquad(
   teamId: string,
   teamName: string,
   countryId: string,
 ): boolean {
-  const idKey = teamId.toLowerCase();
-  const nameKey = teamName.toLowerCase();
   const rosterId = rosterTeamId(countryId, teamName);
-
-  return SQUADS.some((entry) =>
-    entry.keys.some(
-      (k) =>
-        k === idKey ||
-        k === rosterId ||
-        k === nameKey ||
-        matchClubName(teamName, k) ||
-        matchClubName(k, teamName),
-    ),
-  );
+  return SQUADS.some((entry) => squadKeysMatch(teamId, rosterId, teamName, entry.keys));
 }
 
 /** Joueurs partis — filtrés même si OpenAI/cache les renvoie encore. */
@@ -465,21 +509,10 @@ export function resolveFlashscoreSquad(
   countryName: string,
   avgPotential: number,
 ): FlashscorePlayerSeed[] {
-  const idKey = teamId.toLowerCase();
-  const nameKey = teamName.toLowerCase();
   const rosterId = rosterTeamId(countryId, teamName);
 
   for (const entry of SQUADS) {
-    if (
-      entry.keys.some(
-        (k) =>
-          k === idKey ||
-          k === rosterId ||
-          k === nameKey ||
-          matchClubName(teamName, k) ||
-          matchClubName(k, teamName),
-      )
-    ) {
+    if (squadKeysMatch(teamId, rosterId, teamName, entry.keys)) {
       return filterDepartedPlayers(entry.players, teamId, teamName, countryId);
     }
   }

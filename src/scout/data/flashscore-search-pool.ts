@@ -5,6 +5,7 @@
 import { LEAGUE_ROSTERS, rosterTeamId } from './league-rosters';
 import { resolveFlashscoreSquad } from './flashscore-squads';
 import { getCountry } from './scout-geo-catalog';
+import { dedupePlayersByName } from './player-primary-club';
 
 export const SCOUT_SEASON = '2026-2027';
 
@@ -74,10 +75,14 @@ function buildPool(): FlashscoreSearchPlayer[] {
     }
   }
 
-  return out;
+  return dedupePlayersByName(out);
 }
 
 let cachedPool: FlashscoreSearchPlayer[] | null = null;
+
+export function invalidateFlashscoreSearchPoolCache() {
+  cachedPool = null;
+}
 
 export function getFlashscoreSearchPool(): FlashscoreSearchPlayer[] {
   if (!cachedPool) cachedPool = buildPool();
