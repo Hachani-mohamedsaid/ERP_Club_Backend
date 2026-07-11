@@ -1,10 +1,4 @@
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  OnModuleInit,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, OnModuleInit, UnauthorizedException, } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
@@ -252,22 +246,41 @@ export class AuthService implements OnModuleInit {
     organizationId: string | null,
     storedRole: ClubMemberRole | null,
   ): Promise<ClubMemberRole> {
-    if (storedRole) return storedRole;
     if (!organizationId) return 'CLUB_ADMIN';
+
+    const owner = await this.prisma.organization.findFirst({
+      where: { id: organizationId, ownerId: userId },
+    });
+    if (owner) return 'CLUB_ADMIN';
+
+    if (storedRole) return storedRole;
 
     const member = await this.prisma.clubMember.findFirst({
       where: { organizationId, email },
     });
     if (member) return member.clubRole;
 
-    const owner = await this.prisma.organization.findFirst({
-      where: { ownerId: userId },
-    });
-    return owner ? 'CLUB_ADMIN' : 'CLUB_ADMIN';
+    return 'CLUB_ADMIN';
   }
 
   signToken(payload: JwtPayload) {
     return this.jwt.signAsync(payload);
+  }
+
+  async changePassword(userId: string, currentPassword: string, newPassword: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new UnauthorizedException('Utilisateur introuvable.');
+
+    const valid = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!valid) throw new UnauthorizedException('Mot de passe actuel incorrect.');
+
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash },
+    });
+
+    return { message: 'Mot de passe mis à jour.' };
   }
 
   private async validateInvitationCode(code?: string) {

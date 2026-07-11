@@ -45,6 +45,8 @@ model Organization {
   financeEntries   ClubFinanceEntry[]
   infrastructures  ClubInfrastructure[]
   injuries         ClubInjury[]
+  matches          ClubMatch[]
+  standing         ClubStanding?
   members          ClubMember[]
   notifications    ClubNotification[]
   permissions      ClubPermission[]
@@ -73,7 +75,15 @@ model Organization {
   recruteurAuditLogs RecruteurAuditLog[]
   sponsors         ClubSponsor[]
   invoices         ClubInvoice[]
+  validationRequests ValidationRequest[]
+  documents          ClubDocument[]
+  prospects          RecruitmentProspect[]
+  scoutReports       ScoutReport[]
+  scoutWatchlist     ScoutWatchlist[]
+  budgetCategories   BudgetCategory[]
+  expenseRequests    ExpenseRequest[]
   authUsers        User[]                    @relation("OrganizationMembers")
+  directConversations ClubDirectConversation[]
 }
 
 model AnalysteModuleData {
@@ -148,8 +158,13 @@ model ClubNotification {
   type           NotifType    @default(INFO)
   level          NotifLevel   @default(INFO)
   isRead         Boolean      @default(false)
+  sourceKey      String?
+  path           String?
+  iconKey        String?
   createdAt      DateTime     @default(now())
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, sourceKey])
 }
 
 model ClubAuditLog {
@@ -217,6 +232,7 @@ model ClubPlayer {
   matchReadiness   MatchReadiness[]
   wellnessEntries  WellnessEntry[]
   recoverySessions RecoverySession[]
+  clubPlayerProfile ClubPlayerProfile?
 }
 
 model ClubStaff {
@@ -224,6 +240,8 @@ model ClubStaff {
   organizationId String
   fullName       String
   role           String
+  phone          String?
+  department     String?
   salaryMonthly  Int          @default(0)
   contractEnd    DateTime?
   isAvailable    Boolean      @default(true)
@@ -559,6 +577,7 @@ enum CalendarEventType {
   MEDICAL
   REUNION
   RECUPERATION
+  SCOUT
 }
 
 enum OrganizationStatus {
@@ -593,6 +612,54 @@ enum SupportTicketPriority {
   CRITICAL
   HIGH
   NORMAL
+}
+
+enum ValidationRequestType {
+  RECRUTEMENT
+  CONTRAT
+  BUDGET
+  CONVOCATION
+  MEDICAL
+}
+
+enum ValidationRequestStatus {
+  EN_ATTENTE
+  VALIDE
+  REFUSE
+  RETOUR
+}
+
+enum ValidationPriority {
+  CRITIQUE
+  HAUTE
+  NORMALE
+}
+
+enum DocumentCategory {
+  CONTRAT_PDF
+  RAPPORT_PDF
+  MEDICAL
+  LICENCE
+}
+
+enum DocumentStatus {
+  VALIDE
+  EXPIRE
+  EN_REVISION
+}
+
+enum RecruitmentStatus {
+  NON_TRAITE
+  EN_OBSERVATION
+  SHORTLISTE
+  CONTACTE
+  REFUSE
+}
+
+enum ExpenseRequestStatus {
+  EN_ATTENTE
+  APPROUVEE
+  REFUSEE
 }
 
 model PlayerLoad {
@@ -794,6 +861,87 @@ model RecruteurNotification {
   @@index([organizationId])
 }
 
+model ValidationRequest {
+  id             String                  @id @default(uuid())
+  organizationId String
+  organization   Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  type           ValidationRequestType
+  title          String
+  detail         String
+  amount         String?
+  priority       ValidationPriority      @default(NORMALE)
+  status         ValidationRequestStatus @default(EN_ATTENTE)
+  requestedBy    String
+  comment        String?
+  sourceKind     String?
+  sourceId       String?
+  decidedAt      DateTime?
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+}
+
+model ClubDocument {
+  id             String           @id @default(uuid())
+  organizationId String
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  category       DocumentCategory
+  playerName     String?
+  fileUrl        String?
+  sizeLabel      String           @default("—")
+  status         DocumentStatus   @default(VALIDE)
+  expiresAt      DateTime?
+  uploadedBy     String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+}
+
+model RecruitmentProspect {
+  id             String            @id @default(uuid())
+  organizationId String
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  fullName       String
+  age            Int               @default(0)
+  position       String
+  externalClub   String            @default("—")
+  nationality    String            @default("TN")
+  potential      Int               @default(0)
+  score          Int               @default(0)
+  status         RecruitmentStatus @default(NON_TRAITE)
+  notes          String?
+  scoutName      String?
+  scoutExtra     Json?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+}
+
+model ScoutReport {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  prospectId     String?
+  prospectName   String
+  scoutName      String
+  matchDate      String?
+  matchObserved  String?
+  opponent       String?
+  technique      Int          @default(0)
+  physique       Int          @default(0)
+  mental         Int          @default(0)
+  tactique       Int          @default(0)
+  vitesse        Int          @default(0)
+  strengths      String?
+  weaknesses     String?
+  recommendation String?
+  decision       String       @default("observe")
+  aiScore        Int?
+  status         String       @default("submitted")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+}
+
 model RecruteurAuditLog {
   id             String                @id @default(uuid())
   organizationId String
@@ -826,4 +974,140 @@ enum RecruteurAuditSeverity {
   SUCCESS
   WARNING
   CRITICAL
+}
+
+model ScoutWatchlist {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  prospectId     String
+  priority       String       @default("B")
+  notes          Json?
+  scoutName      String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([organizationId, prospectId])
+  @@index([organizationId])
+}
+
+model BudgetCategory {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  allocated      Int          @default(0)
+  spent          Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  expenses       ExpenseRequest[]
+
+  @@unique([organizationId, name])
+}
+
+model ExpenseRequest {
+  id             String               @id @default(uuid())
+  organizationId String
+  organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  categoryId     String?
+  category       BudgetCategory?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  label          String
+  amount         Int
+  requestedBy    String
+  status         ExpenseRequestStatus @default(EN_ATTENTE)
+  note           String?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+}
+
+model ClubPlayerProfile {
+  id             String     @id @default(uuid())
+  clubPlayerId   String     @unique
+  clubPlayer     ClubPlayer @relation(fields: [clubPlayerId], references: [id], onDelete: Cascade)
+  career         Json?
+  evolution      Json?
+  heatmapZones   Json?
+  training       Json?
+  matchAnalysis  Json?
+  aiInsight      Json?
+  fifaAttributes Json?
+  chemistry      Json?
+  messages       Json?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@map("club_player_profiles")
+}
+
+model ClubDirectConversation {
+  id             String              @id @default(uuid())
+  organizationId String
+  participantAId String
+  participantBId String
+  lastMessageAt  DateTime            @default(now())
+  createdAt      DateTime            @default(now())
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  messages       ClubDirectMessage[]
+
+  @@unique([organizationId, participantAId, participantBId])
+  @@index([organizationId, lastMessageAt])
+}
+
+model ClubDirectMessage {
+  id             String                   @id @default(uuid())
+  conversationId String
+  senderMemberId String
+  body           String
+  createdAt      DateTime                 @default(now())
+  conversation   ClubDirectConversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  reads          ClubDirectMessageRead[]
+
+  @@index([conversationId, createdAt])
+}
+
+model ClubDirectMessageRead {
+  id        String            @id @default(uuid())
+  messageId String
+  memberId  String
+  readAt    DateTime          @default(now())
+  message   ClubDirectMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, memberId])
+  @@index([memberId])
+}
+
+model ClubMatch {
+  id                 String       @id @default(uuid())
+  organizationId     String
+  organization       Organization @relation(fields: [organizationId], references: [id])
+  opponent           String
+  competition        String       @default("Ligue 1")
+  matchDate          DateTime
+  homeAway           String       @default("D")
+  goalsFor           Int          @default(0)
+  goalsAgainst       Int          @default(0)
+  result             String       @default("N")
+  opponentFormation  String?
+  opponentStrengths  String?
+  opponentWeaknesses String?
+  notes              String?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+}
+
+model ClubStanding {
+  id             String       @id @default(uuid())
+  organizationId String       @unique
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  competition    String       @default("Ligue 1")
+  position       Int          @default(1)
+  points         Int          @default(0)
+  played         Int          @default(0)
+  won            Int          @default(0)
+  drawn          Int          @default(0)
+  lost           Int          @default(0)
+  goalsFor       Int          @default(0)
+  goalsAgainst   Int          @default(0)
+  form           String       @default("")
+  updatedAt      DateTime     @updatedAt
 }

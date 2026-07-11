@@ -16,6 +16,7 @@ import { UpdateOrganizationDto } from './dto/update-organization.dto';
 import { RecordPaymentDto } from './dto/record-payment.dto';
 import { CreateSupportTicketDto, UpdateSupportTicketDto } from './dto/support-ticket.dto';
 import { CreatePlatformUserDto } from './dto/create-platform-user.dto';
+import { RunAiActionDto } from './dto/run-ai-action.dto';
 
 @Controller('platform')
 @UseGuards(JwtAuthGuard, SuperAdminGuard)
@@ -159,5 +160,15 @@ export class PlatformController {
   @Get('notifications')
   getNotifications() {
     return this.platform.getNotifications();
+  }
+
+  @Get('ai')
+  getAiAdmin() {
+    return this.platform.getAiAdmin();
+  }
+
+  @Post('ai/action')
+  runAiAction(@Body() dto: RunAiActionDto) {
+    return this.platform.runAiAction(dto.actionId, dto.prompt);
   }
 }

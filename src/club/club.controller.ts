@@ -17,8 +17,14 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { JwtPayload } from '../auth/jwt-payload.interface';
 import { ClubService } from './club.service';
 import { PreparateurService } from './preparateur.service';
+import { CoachService } from './coach.service';
+import { MedicalService } from './medical.service';
+import { FinanceAiService } from './finance-ai.service';
+import { FinanceNotificationsService } from './finance-notifications.service';
 import { PermissionsGuard } from './guards/permissions.guard';
 import { RequirePermission } from './decorators/require-permission.decorator';
+import { ClubAiChatDto } from './dto/club-ai-chat.dto';
+import { MedicalAiPlayerDto } from './dto/medical-ai-player.dto';
 
 @Controller('club')
 @UseGuards(JwtAuthGuard)
@@ -26,6 +32,10 @@ export class ClubController {
   constructor(
     private readonly club: ClubService,
     private readonly preparateur: PreparateurService,
+    private readonly coach: CoachService,
+    private readonly medical: MedicalService,
+    private readonly financeAi: FinanceAiService,
+    private readonly financeNotifications: FinanceNotificationsService,
   ) {}
 
   private ip(req: Request) {
@@ -116,6 +126,11 @@ export class ClubController {
     return this.club.listPlayers(user);
   }
 
+  @Get('players/:id')
+  getPlayer(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.getPlayer(user, id);
+  }
+
   @Post('players')
   @UseGuards(PermissionsGuard)
   @RequirePermission('Joueurs', 'create')
@@ -202,6 +217,11 @@ export class ClubController {
     return this.club.listCalendarEvents(user);
   }
 
+  @Get('training')
+  getTraining(@CurrentUser() user: JwtPayload) {
+    return this.club.getTrainingOverview(user);
+  }
+
   @Post('calendar')
   @UseGuards(PermissionsGuard)
   @RequirePermission('Calendrier', 'create')
@@ -219,6 +239,22 @@ export class ClubController {
   @RequirePermission('Sante', 'create')
   createInjury(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
     return this.club.createInjury(user, body);
+  }
+
+  @Patch('injuries/:id')
+  @UseGuards(JwtAuthGuard)
+  updateInjury(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.updateInjury(user, id, body);
+  }
+
+  @Delete('injuries/:id')
+  @UseGuards(JwtAuthGuard)
+  deleteInjury(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.club.deleteInjury(user, id);
   }
 
   @Get('analytics')
@@ -473,6 +509,16 @@ export class ClubController {
     return this.preparateur.deleteRecoverySession(user, id);
   }
 
+  @Get('preparateur/ai')
+  getPreparateurAi(@CurrentUser() user: JwtPayload) {
+    return this.preparateur.getPreparateurAi(user);
+  }
+
+  @Post('preparateur/ai/chat')
+  chatPreparateurAi(@CurrentUser() user: JwtPayload, @Body() dto: ClubAiChatDto) {
+    return this.preparateur.chatPreparateurAi(user, dto);
+  }
+
   // ─── Player Photo ────────────────────────────────────────────────
 
   @Patch('players/:id/photo')
@@ -607,14 +653,14 @@ export class ClubController {
 
   @Post('transfers')
   @UseGuards(PermissionsGuard)
-  @RequirePermission('Joueurs', 'create')
+  @RequirePermission('Finances', 'create')
   createTransfer(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
     return this.club.createTransfer(user, body);
   }
 
   @Delete('transfers/:id')
   @UseGuards(PermissionsGuard)
-  @RequirePermission('Joueurs', 'delete')
+  @RequirePermission('Finances', 'delete')
   deleteTransfer(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.club.deleteTransfer(user, id);
   }
@@ -657,14 +703,45 @@ export class ClubController {
     return this.club.deleteFinanceEntry(user, id);
   }
 
-  @Post('finance/seed')
-  seedFinance(@CurrentUser() user: JwtPayload) {
-    return this.club.seedFinanceDataIfEmpty(user);
+  @Post('finance/purge-demo')
+  purgeFinanceDemo(@CurrentUser() user: JwtPayload) {
+    return this.club.purgeFinanceDemoData(user);
   }
 
   @Get('finance/report')
   getFinanceReport(@CurrentUser() user: JwtPayload) {
     return this.club.getFinanceReport(user);
+  }
+
+  @Get('finance/notifications')
+  getFinanceNotifications(@CurrentUser() user: JwtPayload) {
+    return this.financeNotifications.syncAndList(user);
+  }
+
+  @Get('finance/search')
+  getFinanceSearch(@CurrentUser() user: JwtPayload) {
+    return this.financeNotifications.getSearchIndex(user);
+  }
+
+  @Patch('finance/notifications/read')
+  markFinanceNotificationsRead(@CurrentUser() user: JwtPayload) {
+    return this.financeNotifications.markAllRead(user);
+  }
+
+  @Patch('finance/notifications/:id/read')
+  markFinanceNotificationRead(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.financeNotifications.markRead(user, id);
+  }
+
+  @Delete('finance/notifications/:id')
+  dismissFinanceNotification(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.financeNotifications.dismiss(user, id);
   }
 
   // ─── Contracts CRUD extensions ──────────────────────────────
@@ -756,5 +833,108 @@ export class ClubController {
   @RequirePermission('Finances', 'delete')
   deleteInvoice(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.club.deleteInvoice(user, id);
+  }
+
+  @Get('coach/ai')
+  getCoachAi(@CurrentUser() user: JwtPayload) {
+    return this.coach.getCoachAi(user);
+  }
+
+  @Post('coach/ai/chat')
+  chatCoachAi(@CurrentUser() user: JwtPayload, @Body() dto: ClubAiChatDto) {
+    return this.coach.chatCoachAi(user, dto);
+  }
+
+  @Get('medical/ai')
+  getMedicalAi(@CurrentUser() user: JwtPayload) {
+    return this.medical.getMedicalAi(user);
+  }
+
+  @Post('medical/ai/analyze')
+  analyzeMedicalPlayer(@CurrentUser() user: JwtPayload, @Body() dto: MedicalAiPlayerDto) {
+    return this.medical.analyzePlayer(user, dto.playerId);
+  }
+
+  @Post('medical/ai/chat')
+  chatMedicalAi(@CurrentUser() user: JwtPayload, @Body() dto: ClubAiChatDto) {
+    return this.medical.chatMedicalAi(user, dto);
+  }
+
+  @Post('medical/ai/report')
+  generateMedicalReport(@CurrentUser() user: JwtPayload, @Body() dto: MedicalAiPlayerDto) {
+    return this.medical.generateReport(user, dto.playerId);
+  }
+
+  @Get('finance/ai')
+  getFinanceAi(@CurrentUser() user: JwtPayload) {
+    return this.financeAi.getFinanceAi(user);
+  }
+
+  @Post('finance/ai/chat')
+  chatFinanceAi(@CurrentUser() user: JwtPayload, @Body() dto: ClubAiChatDto) {
+    return this.financeAi.chatFinanceAi(user, dto);
+  }
+
+  @Get('ai')
+  getClubAi(@CurrentUser() user: JwtPayload) {
+    return this.club.getClubAi(user);
+  }
+
+  @Post('ai/chat')
+  chatClubAi(@CurrentUser() user: JwtPayload, @Body() dto: ClubAiChatDto) {
+    return this.club.chatClubAi(user, dto);
+  }
+
+  // ??? MATCHES ?????????????????????????
+
+  @Get('matches')
+  @UseGuards(JwtAuthGuard)
+  getMatches(@CurrentUser() user: JwtPayload) {
+    return this.club.getMatches(user);
+  }
+
+  @Post('matches')
+  @UseGuards(JwtAuthGuard)
+  createMatch(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.createMatch(user, body);
+  }
+
+  @Patch('matches/:id')
+  @UseGuards(JwtAuthGuard)
+  updateMatch(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.updateMatch(user, id, body);
+  }
+
+  @Delete('matches/:id')
+  @UseGuards(JwtAuthGuard)
+  deleteMatch(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.club.deleteMatch(user, id);
+  }
+
+  // ??? STANDING ????????????????????????
+
+  @Get('standing')
+  @UseGuards(JwtAuthGuard)
+  getStanding(@CurrentUser() user: JwtPayload) {
+    return this.club.getStanding(user);
+  }
+
+  @Patch('standing')
+  @UseGuards(JwtAuthGuard)
+  updateStanding(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.club.updateStanding(user, body);
   }
 }

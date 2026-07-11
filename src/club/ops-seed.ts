@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { buildDefaultPermissions } from './permissions-seed';
+import { seedResponsableDefaults } from '../responsable/responsable-seed';
 
 interface SeedOpsInput {
   organizationId: string;
@@ -37,4 +38,6 @@ export async function seedClubOps(
 
   const perms = buildDefaultPermissions(input.organizationId);
   await tx.clubPermission.createMany({ data: perms });
+
+  await seedResponsableDefaults(tx, input.organizationId, input.ownerFullName);
 }

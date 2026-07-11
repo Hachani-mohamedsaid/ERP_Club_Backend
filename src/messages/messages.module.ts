@@ -1,0 +1,15 @@
+import { Module } from '@nestjs/common';
+import { AuthModule } from '../auth/auth.module';
+import { ImgbbModule } from '../imgbb/imgbb.module';
+import { PrismaModule } from '../prisma/prisma.module';
+import { MessagesController } from './messages.controller';
+import { MessagesGateway } from './messages.gateway';
+import { MessagesService } from './messages.service';
+
+@Module({
+  imports: [PrismaModule, AuthModule, ImgbbModule],
+  controllers: [MessagesController],
+  providers: [MessagesService, MessagesGateway],
+  exports: [MessagesService, MessagesGateway],
+})
+export class MessagesModule {}

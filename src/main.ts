@@ -1,10 +1,19 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { MicroserviceOptions, Transport } from '@nestjs/microservices';
+import { join } from 'path';
 import { AppModule } from './app.module';
+import { runDatabaseBootstrap } from './prisma/db-bootstrap';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  runDatabaseBootstrap();
+
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // Frames vidéo en base64 (analyse IA) — défaut Express 100kb trop petit
+  app.useBodyParser('json', { limit: '50mb' });
+  app.useBodyParser('urlencoded', { limit: '50mb', extended: true });
+  app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads/' });
 
   const frontendOrigins = (process.env.FRONTEND_URL ?? 'http://localhost:5173')
     .split(',')

@@ -73,8 +73,20 @@ function paymentStatusLabel(status: PaymentStatus) {
   return map[status] ?? status;
 }
 
+type AiActionLog = {
+  id: string;
+  actionId: string;
+  label: string;
+  result: string;
+  durationMs: number;
+  createdAt: string;
+};
+
 @Injectable()
 export class PlatformService implements OnModuleInit {
+  private aiActionLogs: AiActionLog[] = [];
+  private aiResponseTimesMs: number[] = [];
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly auth: AuthService,
@@ -1568,6 +1580,265 @@ export class PlatformService implements OnModuleInit {
       }
 
       return { unread: items.filter((i) => !i.read).length, items };
+    });
+  }
+
+  // ─── IA Admin (OpenAI) ─────────────────────────────────────────
+
+  private async resolveAiConfig() {
+    const settings = await this.getSettings();
+    const extended = settings as Record<string, unknown>;
+    const enabled = extended.aiEnabled !== false;
+    const model = String(extended.aiModel ?? 'gpt-4o-mini');
+    const apiKey =
+      process.env.OPENAI_API_KEY?.trim() ||
+      String(extended.aiApiKey ?? '').trim();
+    return { enabled, model, apiKey, provider: String(extended.aiProvider ?? 'openai') };
+  }
+
+  private async callOpenAi(
+    apiKey: string,
+    model: string,
+    system: string,
+    user: string,
+    maxTokens = 900,
+  ): Promise<string> {
+    const started = Date.now();
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.35,
+        max_tokens: maxTokens,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+      }),
+    });
+
+    const durationMs = Date.now() - started;
+    this.aiResponseTimesMs = [...this.aiResponseTimesMs.slice(-49), durationMs];
+
+    if (!res.ok) {
+      const errBody = await res.text();
+      throw new BadRequestException(
+        `OpenAI (${res.status}): ${errBody.slice(0, 280)}`,
+      );
+    }
+
+    const json = (await res.json()) as {
+      choices?: { message?: { content?: string } }[];
+    };
+    const content = json.choices?.[0]?.message?.content?.trim();
+    if (!content) throw new BadRequestException('Réponse OpenAI vide.');
+    return content;
+  }
+
+  private buildPlatformContext(metrics: Awaited<ReturnType<PlatformService['getMetrics']>>) {
+    const { kpis } = metrics;
+    return [
+      `Clubs: ${kpis.totalClubs} total, ${kpis.activeClubs} actifs, ${kpis.trialClubs} en essai, ${kpis.suspendedClubs} suspendus`,
+      `Utilisateurs: ${kpis.totalUsers} (${kpis.activeUsers} actifs)`,
+      `MRR: ${kpis.mrr} DT | Revenus mois: ${kpis.revenueMonth} DT`,
+      `Abonnements actifs: ${kpis.activeSubscriptions} | Essais: ${kpis.trialSubscriptions}`,
+      `Paiements échoués: ${kpis.failedPayments} | En attente: ${kpis.pendingPayments}`,
+      `Croissance: ${kpis.growthPct}% | Rétention: ${kpis.retentionPct}%`,
+    ].join('\n');
+  }
+
+  async getAiAdmin() {
+    return this.runPlatform(async () => {
+      const [metrics, config, criticalTickets, failedPayments] = await Promise.all([
+        this.getMetrics(),
+        this.resolveAiConfig(),
+        this.prisma.platformSupportTicket.count({
+          where: { status: { in: ['OPEN', 'IN_PROGRESS'] }, priority: 'CRITICAL' },
+        }).catch(() => 0),
+        this.prisma.platformPayment.count({ where: { status: 'FAILED' } }).catch(() => 0),
+      ]);
+
+      const { kpis } = metrics;
+      const alertCount =
+        criticalTickets +
+        failedPayments +
+        kpis.suspendedClubs +
+        (kpis.trialSubscriptions > 0 ? 1 : 0);
+
+      const avgMs =
+        this.aiResponseTimesMs.length > 0
+          ? Math.round(
+              this.aiResponseTimesMs.reduce((a, b) => a + b, 0) /
+                this.aiResponseTimesMs.length,
+            )
+          : null;
+
+      const hasKey = config.apiKey.length > 0;
+      const status = !config.enabled
+        ? 'disabled'
+        : hasKey
+          ? 'available'
+          : 'no_key';
+
+      const pipeline: { title: string; subtitle: string; severity: string }[] = [];
+
+      if (criticalTickets > 0) {
+        pipeline.push({
+          title: `${criticalTickets} ticket(s) support critique(s)`,
+          subtitle: 'Priorité immédiate — SLA plateforme',
+          severity: 'critical',
+        });
+      }
+      if (failedPayments > 0) {
+        pipeline.push({
+          title: `${failedPayments} paiement(s) échoué(s)`,
+          subtitle: 'Relance facturation et activation abonnements',
+          severity: 'warning',
+        });
+      }
+      if (kpis.trialSubscriptions > 0) {
+        pipeline.push({
+          title: `${kpis.trialSubscriptions} club(s) en période d'essai`,
+          subtitle: 'Conversion essai → abonnement payant',
+          severity: 'info',
+        });
+      }
+      if (kpis.suspendedClubs > 0) {
+        pipeline.push({
+          title: `${kpis.suspendedClubs} club(s) suspendu(s)`,
+          subtitle: 'Vérifier impayés et réactivation',
+          severity: 'warning',
+        });
+      }
+      if (pipeline.length === 0) {
+        pipeline.push({
+          title: 'Pipeline opérationnel',
+          subtitle: 'Aucune demande critique en attente',
+          severity: 'success',
+        });
+      }
+
+      pipeline.push({
+        title: 'Temps de réponse moyen IA',
+        subtitle: avgMs != null ? `${(avgMs / 1000).toFixed(1)} s / requête` : 'Aucune requête IA exécutée',
+        severity: 'info',
+      });
+
+      const requestsProcessed =
+        this.aiActionLogs.length +
+        (await this.prisma.platformSupportTicket.count().catch(() => 0));
+
+      return {
+        status,
+        model: config.model,
+        provider: config.provider,
+        hasApiKey: hasKey,
+        kpis: {
+          assistantStatus:
+            status === 'available'
+              ? 'Disponible'
+              : status === 'disabled'
+                ? 'Désactivé'
+                : 'Clé API manquante',
+          requestsProcessed,
+          avgResponseTime:
+            avgMs != null ? `${(avgMs / 1000).toFixed(1)}s` : '—',
+          alertCount,
+        },
+        pipeline,
+        actions: [
+          {
+            id: 'performance',
+            label: 'Analyse de performance',
+            description: 'Synthèse IA des KPIs plateforme et recommandations.',
+          },
+          {
+            id: 'monthly_report',
+            label: 'Rapport mensuel',
+            description: 'Rapport exécutif du mois pour la direction ODIN.',
+          },
+          {
+            id: 'anomaly',
+            label: 'Surveillance des anomalies',
+            description: 'Détection des risques billing, churn et sécurité.',
+          },
+        ],
+        logs: this.aiActionLogs.slice(0, 12),
+        platformSnapshot: {
+          totalClubs: kpis.totalClubs,
+          mrr: kpis.mrr,
+          failedPayments: kpis.failedPayments,
+          trialSubscriptions: kpis.trialSubscriptions,
+        },
+      };
+    });
+  }
+
+  async runAiAction(actionId: 'performance' | 'monthly_report' | 'anomaly', extraPrompt?: string) {
+    return this.runPlatform(async () => {
+      const config = await this.resolveAiConfig();
+      if (!config.enabled) {
+        throw new BadRequestException('Assistant IA désactivé dans les paramètres plateforme.');
+      }
+      if (!config.apiKey) {
+        throw new BadRequestException(
+          'Clé OpenAI manquante. Définissez OPENAI_API_KEY (serveur) ou aiApiKey dans Paramètres.',
+        );
+      }
+
+      const metrics = await this.getMetrics();
+      const context = this.buildPlatformContext(metrics);
+      const labels: Record<string, string> = {
+        performance: 'Analyse de performance',
+        monthly_report: 'Rapport mensuel',
+        anomaly: 'Surveillance des anomalies',
+      };
+
+      const prompts: Record<string, string> = {
+        performance: `Analyse la performance de la plateforme ODIN ERP (SaaS clubs de football tunisiens).
+Données:\n${context}
+${extraPrompt ? `\nConsigne additionnelle: ${extraPrompt}` : ''}
+Structure: Résumé exécutif (3 lignes), KPIs clés, 3 recommandations actionnables, risques.`,
+        monthly_report: `Rédige un rapport mensuel concis pour Super Admin ODIN ERP.
+Données:\n${context}
+${extraPrompt ? `\nConsigne: ${extraPrompt}` : ''}
+Sections: Vue d'ensemble, Finances, Clubs & abonnements, Actions prioritaires.`,
+        anomaly: `Surveille les anomalies sur la plateforme ODIN ERP.
+Données:\n${context}
+${extraPrompt ? `\nFocus: ${extraPrompt}` : ''}
+Liste: anomalies détectées, sévérité (haute/moyenne/basse), action corrective pour chaque.`,
+      };
+
+      const started = Date.now();
+      const result = await this.callOpenAi(
+        config.apiKey,
+        config.model,
+        'Tu es l\'assistant IA Super Admin d\'ODIN ERP, plateforme SaaS pour clubs de football. Réponds en français, concis et professionnel. Utilise des listes à puces quand pertinent.',
+        prompts[actionId],
+      );
+      const durationMs = Date.now() - started;
+
+      const log: AiActionLog = {
+        id: `ai-${Date.now()}`,
+        actionId,
+        label: labels[actionId],
+        result,
+        durationMs,
+        createdAt: new Date().toISOString(),
+      };
+      this.aiActionLogs = [log, ...this.aiActionLogs].slice(0, 20);
+
+      return {
+        actionId,
+        label: labels[actionId],
+        result,
+        durationMs,
+        model: config.model,
+      };
     });
   }
 }

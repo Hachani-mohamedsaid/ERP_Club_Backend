@@ -1,41 +1,27 @@
-import { Controller, Delete, Get, Param, Patch, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { JwtPayload } from '../auth/jwt-payload.interface';
+import { RecruteurAiReportDto, RecruteurAiSearchDto } from './dto/recruteur-ai.dto';
 import { RecruteurService } from './recruteur.service';
 
-@Controller('club/recruteur')
+@Controller('recruteur')
 @UseGuards(JwtAuthGuard)
 export class RecruteurController {
   constructor(private readonly recruteur: RecruteurService) {}
 
-  @Get('notifications')
-  listNotifications(@CurrentUser() user: JwtPayload) {
-    return this.recruteur.listNotifications(user);
+  @Get('ai')
+  getAi(@CurrentUser() user: JwtPayload) {
+    return this.recruteur.getRecruteurAi(user);
   }
 
-  @Patch('notifications/read-all')
-  markAllNotificationsRead(@CurrentUser() user: JwtPayload) {
-    return this.recruteur.markAllNotificationsRead(user);
+  @Post('ai/search')
+  searchAi(@CurrentUser() user: JwtPayload, @Body() dto: RecruteurAiSearchDto) {
+    return this.recruteur.searchRecruteurAi(user, dto.query);
   }
 
-  @Patch('notifications/:id/read')
-  markNotificationRead(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.recruteur.markNotificationRead(user, id);
-  }
-
-  @Delete('notifications/:id')
-  deleteNotification(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.recruteur.deleteNotification(user, id);
-  }
-
-  @Get('audit-logs')
-  listAuditLogs(
-    @CurrentUser() user: JwtPayload,
-    @Query('action') action?: string,
-    @Query('severity') severity?: string,
-    @Query('search') search?: string,
-  ) {
-    return this.recruteur.listAuditLogs(user, { action, severity, search });
+  @Post('ai/report')
+  generateReport(@CurrentUser() user: JwtPayload, @Body() dto: RecruteurAiReportDto) {
+    return this.recruteur.generateReport(user, dto.templateId, dto.format);
   }
 }

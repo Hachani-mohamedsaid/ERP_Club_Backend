@@ -18,9 +18,11 @@ import { JwtPayload } from '../auth/jwt-payload.interface';
 import { PrismaService } from '../prisma/prisma.service';
 import { ClubAccessService } from './club-access.service';
 import { ClubAuditService } from './club-audit.service';
+import { ValidationRequestService } from './validation-request.service';
 import {
   buildDefaultPermissions,
   clubRoleToLabel,
+  getDefaultPermission,
   labelToClubRole,
   PERMISSION_MODULES,
 } from './permissions-seed';
@@ -33,6 +35,7 @@ export class ClubService {
     private readonly prisma: PrismaService,
     private readonly access: ClubAccessService,
     private readonly audit: ClubAuditService,
+    private readonly validationRequests: ValidationRequestService,
   ) {}
 
   private orgId(user: JwtPayload) {
@@ -453,11 +456,13 @@ export class ClubService {
         organizationId_module_clubRole: { organizationId, module, clubRole },
       },
     });
-    if (!row) return false;
-    if (action === 'read') return row.canRead;
-    if (action === 'create') return row.canCreate;
-    if (action === 'update') return row.canUpdate;
-    return row.canDelete;
+    if (row) {
+      if (action === 'read') return row.canRead;
+      if (action === 'create') return row.canCreate;
+      if (action === 'update') return row.canUpdate;
+      return row.canDelete;
+    }
+    return getDefaultPermission(module, clubRole, action);
   }
 
   // ─── Notifications ─────────────────────────────────────────────
@@ -640,6 +645,23 @@ export class ClubService {
   }
 
   // ─── Players ───────────────────────────────────────────────────
+  async getPlayer(user: JwtPayload, id: string) {
+    const organizationId = this.orgId(user);
+    const player = await this.prisma.clubPlayer.findFirst({
+      where: { id, organizationId },
+    });
+    if (!player) throw new NotFoundException('Joueur introuvable.');
+    const member = await this.prisma.clubMember.findFirst({
+      where: { organizationId, clubPlayerId: id },
+      select: { email: true },
+    });
+    return {
+      ...this.formatPlayer(player),
+      hasAccount: Boolean(member),
+      accountEmail: member?.email ?? null,
+    };
+  }
+
   async listPlayers(user: JwtPayload) {
     const organizationId = this.orgId(user);
     const [players, joueurMembers] = await Promise.all([
@@ -1026,10 +1048,113 @@ export class ClubService {
       type: AuditActionType.CREATION,
       ipAddress: ip,
     });
+
+    if (!this.validationRequests.canSelfValidate(user)) {
+      await this.validationRequests.create(user, {
+        type: 'CONTRAT',
+        title: 'Renouvellement contrat',
+        detail: `${holderName} — jusqu'au ${endDate.toLocaleDateString('fr-FR')}`,
+        amount: `${Number(data.salaryMonthly ?? 0).toLocaleString('fr-FR')} DT/mois`,
+        priority: 'HAUTE',
+        sourceKind: 'contract',
+        sourceId: c.id,
+      });
+    }
+
     return c;
   }
 
   // ─── Calendar ──────────────────────────────────────────────────
+  private weekStartMonday(d: Date) {
+    const copy = new Date(d);
+    const day = copy.getDay();
+    const diff = day === 0 ? -6 : 1 - day;
+    copy.setDate(copy.getDate() + diff);
+    copy.setHours(0, 0, 0, 0);
+    return copy;
+  }
+
+  private parseDurationMinutes(raw: unknown): number | null {
+    if (raw == null) return null;
+    const s = String(raw).trim().toLowerCase();
+    const hMin = s.match(/(\d+)\s*h(?:\s*(\d+))?/);
+    if (hMin) return parseInt(hMin[1], 10) * 60 + (hMin[2] ? parseInt(hMin[2], 10) : 0);
+    const min = s.match(/(\d+)\s*min/);
+    if (min) return parseInt(min[1], 10);
+    const num = s.match(/^(\d+)$/);
+    if (num) return parseInt(num[1], 10);
+    return null;
+  }
+
+  async getTrainingOverview(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const [events, players, presences] = await Promise.all([
+      this.prisma.clubCalendarEvent.findMany({
+        where: { organizationId, eventType: 'ENTRAINEMENT' },
+        orderBy: [{ eventDate: 'asc' }, { eventTime: 'asc' }],
+      }),
+      this.prisma.clubPlayer.findMany({
+        where: { organizationId },
+        select: { id: true, age: true },
+      }),
+      this.prisma.sessionPresence.findMany({ where: { organizationId } }),
+    ]);
+
+    const start = this.weekStartMonday(new Date());
+    const end = new Date(start);
+    end.setDate(end.getDate() + 7);
+
+    const presenceMap = new Map(presences.map((p) => [p.playerId, p.status]));
+    const presentStatuses = new Set(['Présent', 'Present', 'present']);
+    const presentCount = players.filter((p) =>
+      presentStatuses.has(presenceMap.get(p.id) ?? 'Présent'),
+    ).length;
+
+    const weekEvents = events.filter((e) => {
+      const d = new Date(e.eventDate);
+      d.setHours(12, 0, 0, 0);
+      return d >= start && d < end;
+    });
+
+    const durationMinutes = weekEvents
+      .map((e) => {
+        const extra = (e.extraData ?? {}) as Record<string, unknown>;
+        return this.parseDurationMinutes(extra.duration);
+      })
+      .filter((m): m is number => m != null && m > 0);
+
+    const avgDurationMinutes =
+      durationMinutes.length > 0
+        ? Math.round(durationMinutes.reduce((s, m) => s + m, 0) / durationMinutes.length)
+        : null;
+
+    return {
+      weekStart: start.toLocaleDateString('fr-FR'),
+      summary: {
+        attendancePct: players.length > 0 ? Math.round((presentCount / players.length) * 100) : null,
+        presentCount,
+        totalPlayers: players.length,
+        seniorCount: players.filter((p) => p.age >= 21).length,
+        sessionsThisWeek: weekEvents.length,
+        avgDurationMinutes,
+      },
+      sessions: weekEvents.map((e) => {
+        const extra = (e.extraData ?? {}) as Record<string, unknown>;
+        const duration = extra.duration != null ? String(extra.duration) : null;
+        return {
+          id: e.id,
+          title: e.title,
+          eventDate: e.eventDate.toISOString().split('T')[0],
+          eventTime: e.eventTime,
+          location: e.location,
+          duration,
+          durationMinutes: this.parseDurationMinutes(duration),
+          intensity: extra.intensity != null ? String(extra.intensity) : null,
+        };
+      }),
+    };
+  }
+
   async listCalendarEvents(user: JwtPayload) {
     const organizationId = this.orgId(user);
     return this.prisma.clubCalendarEvent.findMany({
@@ -1040,14 +1165,32 @@ export class ClubService {
 
   async createCalendarEvent(user: JwtPayload, data: Record<string, unknown>) {
     const organizationId = this.orgId(user);
+    const title = String(data.title ?? '').trim();
+    if (!title) {
+      throw new BadRequestException('Le titre est requis.');
+    }
+
+    const extraFromBody = data.extraData as Record<string, unknown> | undefined;
+    const extraData: Record<string, string> = extraFromBody
+      ? Object.fromEntries(
+          Object.entries(extraFromBody).map(([k, v]) => [k, String(v ?? '')]),
+        )
+      : {};
+    if (data.duration != null) extraData.duration = String(data.duration);
+    if (data.intensity != null) extraData.intensity = String(data.intensity);
+    if (data.sessionType != null) extraData.sessionType = String(data.sessionType);
+    if (data.objective != null) extraData.objective = String(data.objective);
+
     return this.prisma.clubCalendarEvent.create({
       data: {
         organizationId,
-        title: String(data.title ?? ''),
+        title,
         eventDate: new Date(String(data.eventDate ?? Date.now())),
         eventTime: data.eventTime ? String(data.eventTime) : null,
         eventType: (data.eventType as never) ?? 'ENTRAINEMENT',
         location: data.location ? String(data.location) : null,
+        notes: data.notes ? String(data.notes) : null,
+        ...(Object.keys(extraData).length > 0 ? { extraData } : {}),
       },
     });
   }
@@ -1131,6 +1274,59 @@ export class ClubService {
       riskIA: injury.riskScore,
       createdAt: injury.createdAt.toISOString(),
     };
+  }
+
+  async updateInjury(user: JwtPayload, id: string, data: Record<string, unknown>) {
+    const organizationId = this.orgId(user);
+    const injury = await this.prisma.clubInjury.findFirst({
+      where: { id, organizationId },
+    });
+    if (!injury) throw new NotFoundException('Blessure introuvable.');
+
+    const updated = await this.prisma.clubInjury.update({
+      where: { id },
+      data: {
+        ...(data.injuryType != null ? { injuryType: String(data.injuryType) } : {}),
+        ...(data.bodyPart !== undefined ? { bodyPart: String(data.bodyPart) } : {}),
+        ...(data.returnDate !== undefined
+          ? { returnDate: data.returnDate ? new Date(String(data.returnDate)) : null }
+          : {}),
+        ...(data.riskScore !== undefined ? { riskScore: Number(data.riskScore) } : {}),
+      },
+    });
+
+    return {
+      id: updated.id,
+      name: updated.playerName,
+      injury: updated.injuryType,
+      bodyPart: updated.bodyPart,
+      returnDate: updated.returnDate?.toLocaleDateString('fr-FR') ?? '—',
+      riskIA: updated.riskScore,
+    };
+  }
+
+  async deleteInjury(user: JwtPayload, id: string) {
+    const organizationId = this.orgId(user);
+    const injury = await this.prisma.clubInjury.findFirst({
+      where: { id, organizationId },
+    });
+    if (!injury) throw new NotFoundException('Blessure introuvable.');
+
+    await this.prisma.clubInjury.delete({ where: { id } });
+
+    if (injury.playerName) {
+      const remaining = await this.prisma.clubInjury.count({
+        where: { organizationId, playerName: injury.playerName },
+      });
+      if (remaining === 0) {
+        await this.prisma.clubPlayer.updateMany({
+          where: { organizationId, fullName: injury.playerName },
+          data: { status: 'DISPONIBLE' },
+        });
+      }
+    }
+
+    return { message: 'Blessure supprimée.' };
   }
 
   // ─── Analytics ─────────────────────────────────────────────────
@@ -1575,56 +1771,72 @@ export class ClubService {
   // ─── Transfers ───────────────────────────────────────────────────
   async getTransfers(user: JwtPayload) {
     const organizationId = this.orgId(user);
-    const existing = await this.prisma.playerTransfer.findMany({
+    return this.prisma.playerTransfer.findMany({
       where: { organizationId },
       orderBy: { createdAt: 'desc' },
     });
-    if (existing.length === 0) {
-      await this.seedTransfers(organizationId, user.fullName);
-      return this.prisma.playerTransfer.findMany({
-        where: { organizationId },
-        orderBy: { createdAt: 'desc' },
-      });
-    }
-    return existing;
+  }
+
+  private parseMoneyAmount(raw: unknown): number {
+    if (typeof raw === 'number' && Number.isFinite(raw)) return Math.abs(raw);
+    const cleaned = String(raw ?? '').replace(/\s/g, '').toUpperCase();
+    const num = parseFloat(cleaned.replace(/[^\d.,]/g, '').replace(',', '.'));
+    if (!Number.isFinite(num)) return 0;
+    if (cleaned.includes('M')) return num * 1_000_000;
+    if (cleaned.includes('K')) return num * 1_000;
+    return num;
   }
 
   async createTransfer(user: JwtPayload, data: Record<string, unknown>) {
     const organizationId = this.orgId(user);
-    return this.prisma.playerTransfer.create({
+    const playerName = String(data.playerName ?? '').trim();
+    if (!playerName) {
+      throw new BadRequestException('Le nom du joueur est requis.');
+    }
+
+    const transferType = String(data.transferType ?? 'ACHAT').toUpperCase();
+    const club = String(data.club ?? data.toClub ?? data.fromClub ?? '').trim();
+    const fee = this.parseMoneyAmount(data.fee ?? data.value);
+    const value =
+      data.value != null && String(data.value).trim()
+        ? String(data.value)
+        : fee > 0
+          ? `${fee.toLocaleString('fr-FR')} DT`
+          : '0';
+
+    const transfer = await this.prisma.playerTransfer.create({
       data: {
         organizationId,
-        playerName: String(data.playerName ?? ''),
-        transferType: String(data.transferType ?? 'Rumeur'),
-        club: String(data.club ?? ''),
-        value: String(data.value ?? '0'),
-        status: String(data.status ?? 'Scouting'),
-        probability: Number(data.probability ?? 0),
+        playerName,
+        transferType,
+        club,
+        value,
+        status: String(data.status ?? 'Confirmé'),
+        probability: Number(data.probability ?? 100),
       },
     });
+
+    if (fee > 0 && (transferType === 'ACHAT' || transferType === 'VENTE')) {
+      await this.prisma.clubFinanceEntry.create({
+        data: {
+          organizationId,
+          label: `Transfert ${transferType === 'ACHAT' ? 'achat' : 'vente'} — ${playerName}`,
+          amount: fee,
+          type: transferType === 'ACHAT' ? 'EXPENSE' : 'REVENUE',
+          category: 'Transferts',
+          entryDate: new Date(),
+        },
+      });
+      await this.syncDashboardStats(organizationId);
+    }
+
+    return transfer;
   }
 
   async deleteTransfer(user: JwtPayload, id: string) {
     const organizationId = this.orgId(user);
     await this.prisma.playerTransfer.deleteMany({ where: { id, organizationId } });
     return { message: 'Transfert supprimé' };
-  }
-
-  private async seedTransfers(organizationId: string, adminName: string) {
-    const players = await this.prisma.clubPlayer.findMany({ where: { organizationId }, take: 6 });
-    if (players.length === 0) return;
-    const clubs = ['CS Sfaxien', 'US Monastir', 'JS Kairouan', 'Espérance ST', 'Al-Ahli'];
-    const statuses = ['Négociation', 'Offre reçue', 'Scouting', 'Intérêt'];
-    const transfers = players.slice(0, 4).map((p, i) => ({
-      organizationId,
-      playerName: p.fullName,
-      transferType: i < 2 ? 'Sortant' : i === 2 ? 'Entrant' : 'Rumeur',
-      club: clubs[i % clubs.length],
-      value: `${(0.5 + Math.random() * 3).toFixed(1)}M €`,
-      status: statuses[i % statuses.length],
-      probability: Math.round(20 + Math.random() * 70),
-    }));
-    await this.prisma.playerTransfer.createMany({ data: transfers });
   }
 
   // ─── Chemistry ───────────────────────────────────────────────────
@@ -1731,15 +1943,10 @@ export class ClubService {
   // ─── Sponsors ───────────────────────────────────────────────────
   async listSponsors(user: JwtPayload) {
     const organizationId = this.orgId(user);
-    const sponsors = await this.prisma.clubSponsor.findMany({
+    return this.prisma.clubSponsor.findMany({
       where: { organizationId },
       orderBy: { montant: 'desc' },
     });
-    if (sponsors.length === 0) {
-      await this.seedSponsors(organizationId);
-      return this.prisma.clubSponsor.findMany({ where: { organizationId }, orderBy: { montant: 'desc' } });
-    }
-    return sponsors;
   }
 
   async createSponsor(user: JwtPayload, data: Record<string, unknown>) {
@@ -1790,34 +1997,71 @@ export class ClubService {
     return { success: true };
   }
 
-  private async seedSponsors(organizationId: string) {
-    const now = new Date();
-    const nextYear = new Date(now.getFullYear() + 1, now.getMonth(), 1);
-    const nextTwoYears = new Date(now.getFullYear() + 2, now.getMonth(), 1);
-    const lastMonth = new Date(now.getFullYear() - 1, now.getMonth(), 1);
-    await this.prisma.clubSponsor.createMany({
-      data: [
-        { organizationId, nom: 'Sponsor Principal', logo: '🏆', secteur: 'Équipement', montant: 450000, startDate: lastMonth, endDate: nextTwoYears, renewalProbability: 90, status: 'Actif', contact: 'Responsable commercial', notes: 'Partenaire équipementier principal' },
-        { organizationId, nom: 'Sponsor Maillot', logo: '✈️', secteur: 'Services', montant: 350000, startDate: lastMonth, endDate: nextYear, renewalProbability: 75, status: 'Actif', contact: 'Directeur marketing', notes: 'Sponsor maillot domicile' },
-        { organizationId, nom: 'Partenaire Télécom', logo: '📡', secteur: 'Télécom', montant: 280000, startDate: lastMonth, endDate: new Date(now.getFullYear(), now.getMonth() + 2, 1), renewalProbability: 55, status: 'Expire bientot', contact: 'Chef de partenariats', notes: 'À renouveler' },
-        { organizationId, nom: 'Partenaire Financier', logo: '🏦', secteur: 'Finance', montant: 150000, startDate: new Date(now.getFullYear() - 2, 0, 1), endDate: lastMonth, renewalProbability: 20, status: 'Expire', contact: 'Directeur régional', notes: 'Négociations en cours' },
-      ],
-      skipDuplicates: true,
-    });
-  }
+  // ─── Finance demo cleanup (removes auto-seeded rows, keeps user-created data) ─
+  async purgeFinanceDemoData(user: JwtPayload) {
+    const organizationId = this.orgId(user);
 
-  // ─── Invoices ────────────────────────────────────────────────────
+    const demoSponsors = [
+      'Sponsor Principal',
+      'Sponsor Maillot',
+      'Partenaire Télécom',
+      'Partenaire Financier',
+    ];
+    const demoContracts = [
+      'Joueur Attaquant',
+      'Joueur Défenseur',
+      'Milieu de terrain',
+      'Gardien de but',
+      'Coach Principal',
+    ];
+    const demoInvoiceRefs = ['FAC-001', 'FAC-002', 'FAC-003', 'FAC-004', 'FAC-005'];
+
+    const [sponsors, invoices, contracts, entries] = await Promise.all([
+      this.prisma.clubSponsor.deleteMany({
+        where: { organizationId, nom: { in: demoSponsors } },
+      }),
+      this.prisma.clubInvoice.deleteMany({
+        where: { organizationId, reference: { in: demoInvoiceRefs } },
+      }),
+      this.prisma.clubContract.deleteMany({
+        where: { organizationId, holderName: { in: demoContracts } },
+      }),
+      this.prisma.clubFinanceEntry.findMany({ where: { organizationId } }),
+    ]);
+
+    const demoEntryIds = entries
+      .filter(
+        (e) =>
+          /^(Droits TV|Billetterie|Salaires|Équipements) —/.test(e.label) ||
+          ['Sponsor principal — Q2', 'Transfert entrant', 'Transfert sortant'].includes(
+            e.label,
+          ),
+      )
+      .map((e) => e.id);
+
+    const financeEntries =
+      demoEntryIds.length > 0
+        ? await this.prisma.clubFinanceEntry.deleteMany({
+            where: { id: { in: demoEntryIds } },
+          })
+        : { count: 0 };
+
+    return {
+      purged: true,
+      removed: {
+        sponsors: sponsors.count,
+        invoices: invoices.count,
+        contracts: contracts.count,
+        financeEntries: financeEntries.count,
+      },
+    };
+  }
   async listInvoices(user: JwtPayload) {
     const organizationId = this.orgId(user);
-    const invoices = await this.prisma.clubInvoice.findMany({
+    return this.prisma.clubInvoice.findMany({
       where: { organizationId },
       orderBy: { invoiceDate: 'desc' },
     });
-    if (invoices.length === 0) {
-      await this.seedInvoices(organizationId);
-      return this.prisma.clubInvoice.findMany({ where: { organizationId }, orderBy: { invoiceDate: 'desc' } });
-    }
-    return invoices;
   }
 
   async createInvoice(user: JwtPayload, data: Record<string, unknown>) {
@@ -1870,62 +2114,6 @@ export class ClubService {
     return this.prisma.clubInvoice.update({ where: { id }, data: { status: 'Payée' } });
   }
 
-  private async seedInvoices(organizationId: string) {
-    const now = new Date();
-    await this.prisma.clubInvoice.createMany({
-      data: [
-        { organizationId, reference: 'FAC-001', fournisseur: 'Équipement Sport', invoiceType: 'Équipement', montant: 15000, invoiceDate: new Date(now.getFullYear(), now.getMonth(), 1), status: 'Payée', description: 'Matériel sportif saison' },
-        { organizationId, reference: 'FAC-002', fournisseur: 'Maintenance Stade', invoiceType: 'Infrastructure', montant: 8500, invoiceDate: new Date(now.getFullYear(), now.getMonth(), 5), status: 'Payée', description: 'Entretien terrain' },
-        { organizationId, reference: 'FAC-003', fournisseur: 'Transport Club', invoiceType: 'Transport', montant: 12000, invoiceDate: new Date(now.getFullYear(), now.getMonth(), 10), dueDate: new Date(now.getFullYear(), now.getMonth() + 1, 10), status: 'En attente', description: 'Déplacements matchs' },
-        { organizationId, reference: 'FAC-004', fournisseur: 'Assurance Joueurs', invoiceType: 'Fournisseur', montant: 25000, invoiceDate: new Date(now.getFullYear(), now.getMonth() - 1, 15), dueDate: new Date(now.getFullYear(), now.getMonth(), 15), status: 'Retard', description: 'Couverture accidents sportifs' },
-        { organizationId, reference: 'FAC-005', fournisseur: 'Fournitures Médicales', invoiceType: 'Médical', montant: 6500, invoiceDate: new Date(now.getFullYear(), now.getMonth(), 12), dueDate: new Date(now.getFullYear(), now.getMonth() + 1, 12), status: 'En attente', description: 'Matériel infirmerie' },
-      ],
-      skipDuplicates: true,
-    });
-  }
-
-  // ─── Finance seeding check ───────────────────────────────────────
-  async seedFinanceDataIfEmpty(user: JwtPayload) {
-    const organizationId = this.orgId(user);
-    const count = await this.prisma.clubFinanceEntry.count({ where: { organizationId } });
-    if (count > 0) return { seeded: false };
-    const now = new Date();
-    const monthLabels = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'];
-    const entries: {
-      organizationId: string; label: string; amount: number;
-      type: 'REVENUE' | 'EXPENSE'; category: string; entryDate: Date;
-    }[] = [];
-    for (let m = 5; m >= 0; m--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - m, 15);
-      const monthName = monthLabels[d.getMonth()];
-      entries.push(
-        { organizationId, label: `Droits TV — ${monthName}`, amount: 120000, type: 'REVENUE', category: 'Médias', entryDate: new Date(d.getFullYear(), d.getMonth(), 5) },
-        { organizationId, label: `Billetterie — ${monthName}`, amount: 35000 + Math.floor(Math.random() * 20000), type: 'REVENUE', category: 'Billetterie', entryDate: new Date(d.getFullYear(), d.getMonth(), 10) },
-        { organizationId, label: `Salaires — ${monthName}`, amount: 180000 + Math.floor(Math.random() * 30000), type: 'EXPENSE', category: 'Salaires', entryDate: new Date(d.getFullYear(), d.getMonth(), 28) },
-        { organizationId, label: `Équipements — ${monthName}`, amount: 15000 + Math.floor(Math.random() * 10000), type: 'EXPENSE', category: 'Équipements', entryDate: new Date(d.getFullYear(), d.getMonth(), 15) },
-      );
-    }
-    entries.push(
-      { organizationId, label: 'Sponsor principal — Q2', amount: 250000, type: 'REVENUE', category: 'Sponsoring', entryDate: new Date(now.getFullYear(), now.getMonth(), 1) },
-      { organizationId, label: 'Transfert entrant', amount: 350000, type: 'REVENUE', category: 'Transferts', entryDate: new Date(now.getFullYear(), now.getMonth() - 2, 20) },
-      { organizationId, label: 'Transfert sortant', amount: 200000, type: 'EXPENSE', category: 'Transferts', entryDate: new Date(now.getFullYear(), now.getMonth() - 1, 10) },
-    );
-    await this.prisma.clubFinanceEntry.createMany({ data: entries });
-    const contractCount = await this.prisma.clubContract.count({ where: { organizationId } });
-    if (contractCount === 0) {
-      await this.prisma.clubContract.createMany({
-        data: [
-          { organizationId, holderName: 'Joueur Attaquant', startDate: new Date('2023-01-01'), endDate: new Date('2026-06-30'), salaryMonthly: 85000, bonus: 12000, consumedPct: 90 },
-          { organizationId, holderName: 'Joueur Défenseur', startDate: new Date('2022-03-15'), endDate: new Date('2026-12-31'), salaryMonthly: 75000, bonus: 10000, consumedPct: 65 },
-          { organizationId, holderName: 'Milieu de terrain', startDate: new Date('2023-07-01'), endDate: new Date('2027-05-31'), salaryMonthly: 68000, bonus: 8000, consumedPct: 35 },
-          { organizationId, holderName: 'Gardien de but', startDate: new Date('2023-09-01'), endDate: new Date('2026-08-31'), salaryMonthly: 55000, bonus: 6000, consumedPct: 75 },
-          { organizationId, holderName: 'Coach Principal', startDate: new Date('2024-01-01'), endDate: new Date('2027-06-30'), salaryMonthly: 65000, bonus: 15000, consumedPct: 50 },
-        ],
-      });
-    }
-    return { seeded: true };
-  }
-
   // ─── Finance Report ──────────────────────────────────────────────
   async getFinanceReport(user: JwtPayload) {
     const financeData = await this.listFinance(user);
@@ -1975,6 +2163,949 @@ export class ClubService {
         }),
         ...expiringSponsors.slice(0, 2).map(s => ({ type: 'sponsor', message: `Sponsor à renouveler: ${s.nom}`, severity: 'info', icon: '🤝' })),
       ],
+    };
+  }
+
+  // ─── Club IA (OpenAI) ───────────────────────────────────────────
+
+  private clubAiResponseTimesMs: number[] = [];
+
+  private async resolveAiConfig() {
+    const row = await this.prisma.platformSettings.findUnique({ where: { id: 'default' } });
+    const extended = (row?.extendedSettings ?? {}) as Record<string, unknown>;
+    const enabled = extended.aiEnabled !== false;
+    const model = String(extended.aiModel ?? 'gpt-4o-mini');
+    const apiKey =
+      process.env.OPENAI_API_KEY?.trim() ||
+      String(extended.aiApiKey ?? '').trim();
+    return { enabled, model, apiKey, provider: String(extended.aiProvider ?? 'openai') };
+  }
+
+  private async callOpenAi(
+    apiKey: string,
+    model: string,
+    system: string,
+    userPrompt: string,
+    maxTokens = 900,
+  ): Promise<string> {
+    const started = Date.now();
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.35,
+        max_tokens: maxTokens,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: userPrompt },
+        ],
+      }),
+    });
+
+    const durationMs = Date.now() - started;
+    this.clubAiResponseTimesMs = [...this.clubAiResponseTimesMs.slice(-49), durationMs];
+
+    if (!res.ok) {
+      const errBody = await res.text();
+      throw new BadRequestException(`OpenAI (${res.status}): ${errBody.slice(0, 280)}`);
+    }
+
+    const json = (await res.json()) as {
+      choices?: { message?: { content?: string } }[];
+    };
+    const content = json.choices?.[0]?.message?.content?.trim();
+    if (!content) throw new BadRequestException('Réponse OpenAI vide.');
+    return content;
+  }
+
+  private parseMarketValue(value: string): number {
+    const cleaned = value.replace(/\s/g, '').toUpperCase();
+    const num = parseFloat(cleaned.replace(/[^\d.]/g, ''));
+    if (!Number.isFinite(num)) return 0;
+    if (cleaned.includes('M')) return num * 1_000_000;
+    if (cleaned.includes('K')) return num * 1_000;
+    return num;
+  }
+
+  private compactForAi(value: unknown, maxLen = 500): unknown {
+    if (value == null) return null;
+    try {
+      const str = JSON.stringify(value);
+      if (str.length <= maxLen) return value;
+      return JSON.parse(str.slice(0, maxLen));
+    } catch {
+      return String(value).slice(0, maxLen);
+    }
+  }
+
+  private async buildClubContext(organizationId: string) {
+    await this.syncDashboardStats(organizationId);
+
+    const org = await this.prisma.organization.findUnique({
+      where: { id: organizationId },
+      include: { dashboardStats: true, profile: true },
+    });
+
+    const [
+      players,
+      staff,
+      injuries,
+      contracts,
+      events,
+      finance,
+      financeAll,
+      sponsors,
+      invoices,
+      infrastructures,
+      transfers,
+      chemistry,
+      prospects,
+      members,
+      matchStats,
+      awards,
+      profiles,
+      trainingSessions,
+      playerLoads,
+      injuryRisks,
+      sessionPresences,
+      matchReadiness,
+      documents,
+    ] = await Promise.all([
+      this.prisma.clubPlayer.findMany({ where: { organizationId }, orderBy: { ovr: 'desc' } }),
+      this.prisma.clubStaff.findMany({ where: { organizationId } }),
+      this.prisma.clubInjury.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+      }),
+      this.prisma.clubContract.findMany({ where: { organizationId }, orderBy: { endDate: 'asc' } }),
+      this.prisma.clubCalendarEvent.findMany({
+        where: { organizationId },
+        orderBy: { eventDate: 'asc' },
+        take: 15,
+      }),
+      this.prisma.clubFinanceEntry.findMany({
+        where: { organizationId },
+        orderBy: { entryDate: 'desc' },
+        take: 50,
+      }),
+      this.prisma.clubFinanceEntry.findMany({
+        where: { organizationId },
+        select: { amount: true, type: true, category: true },
+      }),
+      this.prisma.clubSponsor.findMany({ where: { organizationId } }),
+      this.prisma.clubInvoice.findMany({ where: { organizationId }, take: 20 }),
+      this.prisma.clubInfrastructure.findMany({ where: { organizationId } }),
+      this.prisma.playerTransfer.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+        take: 15,
+      }),
+      this.prisma.playerChemistry.findMany({ where: { organizationId }, take: 30 }),
+      this.prisma.recruitmentProspect.findMany({
+        where: { organizationId },
+        orderBy: { score: 'desc' },
+        take: 20,
+      }),
+      this.prisma.clubMember.findMany({
+        where: { organizationId },
+        select: { fullName: true, email: true, clubRole: true, status: true },
+      }),
+      this.prisma.playerMatchStat.findMany({
+        where: { organizationId },
+        orderBy: { matchDate: 'desc' },
+        take: 100,
+      }),
+      this.prisma.playerAward.findMany({ where: { organizationId } }),
+      this.prisma.clubPlayerProfile.findMany({
+        where: { clubPlayer: { organizationId } },
+      }),
+      this.prisma.trainingSession.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+      }),
+      this.prisma.playerLoad.findMany({
+        where: { organizationId },
+        orderBy: { sessionDate: 'desc' },
+        take: 30,
+      }),
+      this.prisma.injuryRisk.findMany({ where: { organizationId }, take: 20 }),
+      this.prisma.sessionPresence.findMany({ where: { organizationId } }),
+      this.prisma.matchReadiness.findMany({ where: { organizationId } }),
+      this.prisma.playerDocument.findMany({
+        where: { organizationId },
+        select: { playerId: true, name: true, docType: true },
+        take: 30,
+      }),
+    ]);
+
+    const stats = org?.dashboardStats;
+    const revenue = financeAll.filter((f) => f.type === 'REVENUE').reduce((s, f) => s + f.amount, 0);
+    const expenses = financeAll.filter((f) => f.type === 'EXPENSE').reduce((s, f) => s + f.amount, 0);
+    const contractsExpiring = contracts.filter(
+      (c) => c.endDate.getTime() - Date.now() < 90 * 24 * 60 * 60 * 1000,
+    );
+
+    const statusMap: Record<string, string> = {
+      DISPONIBLE: 'Disponible',
+      BLESSE: 'Blessé',
+      LIMITE: 'Limité',
+      FIN_CONTRAT: 'Fin contrat',
+    };
+
+    const playersDetailed = players.map((p) => {
+      const profile = profiles.find((pr) => pr.clubPlayerId === p.id);
+      const pStats = matchStats.filter((m) => m.playerId === p.id);
+      const pAwards = awards.filter((a) => a.playerId === p.id);
+      const pLoads = playerLoads.filter((l) => l.playerId === p.id).slice(0, 3);
+      const pRisks = injuryRisks.filter((r) => r.playerId === p.id);
+      const pPresence = sessionPresences.find((sp) => sp.playerId === p.id);
+      const pReadiness = matchReadiness.find((mr) => mr.playerId === p.id);
+      const avgRating =
+        pStats.length > 0
+          ? Math.round((pStats.reduce((s, m) => s + m.rating, 0) / pStats.length) * 10) / 10
+          : null;
+
+      return {
+        id: p.id,
+        name: p.fullName,
+        position: p.position,
+        age: p.age,
+        ovr: p.ovr,
+        goals: p.goals,
+        marketValue: p.marketValue,
+        marketValueNum: this.parseMarketValue(p.marketValue),
+        salaryMonthly: p.salaryMonthly,
+        status: statusMap[p.status] ?? p.status,
+        nationality: p.nationality,
+        jerseyNumber: p.jerseyNumber,
+        height: p.height,
+        weight: p.weight,
+        strongFoot: p.strongFoot,
+        radar: p.radar,
+        stats: this.compactForAi(p.stats, 600),
+        fifaAttributes: this.compactForAi(profile?.fifaAttributes, 400),
+        aiInsight: this.compactForAi(profile?.aiInsight, 300),
+        matchSummary: {
+          matchesPlayed: pStats.length,
+          totalGoals: pStats.reduce((s, m) => s + m.goals, 0),
+          totalAssists: pStats.reduce((s, m) => s + m.assists, 0),
+          avgRating,
+        },
+        recentMatches: pStats.slice(0, 5).map((m) => ({
+          date: m.matchDate.toISOString().slice(0, 10),
+          opponent: m.opponent,
+          result: m.result,
+          goals: m.goals,
+          assists: m.assists,
+          rating: m.rating,
+          minutes: m.minutes,
+        })),
+        awards: pAwards.map((a) => ({ title: a.title, season: a.season })),
+        loads: pLoads.map((l) => ({
+          date: l.sessionDate.toISOString().slice(0, 10),
+          load: l.loadScore,
+          fatigue: l.fatigueScore,
+          recovery: l.recoveryScore,
+        })),
+        injuryRisks: pRisks.map((r) => ({ zone: r.zone, risk: r.risk })),
+        presence: pPresence?.status ?? null,
+        matchReadiness: pReadiness?.status ?? null,
+      };
+    });
+
+    const topByOvr = [...playersDetailed].sort((a, b) => b.ovr - a.ovr).slice(0, 5);
+    const topByValue = [...playersDetailed]
+      .sort((a, b) => b.marketValueNum - a.marketValueNum)
+      .slice(0, 5)
+      .map(({ name, ovr, marketValue, position }) => ({ name, ovr, marketValue, position }));
+    const topScorers = [...playersDetailed]
+      .sort((a, b) => b.goals - a.goals)
+      .slice(0, 5)
+      .map(({ name, goals, ovr, position }) => ({ name, goals, ovr, position }));
+    const topRated = [...playersDetailed]
+      .filter((p) => p.matchSummary.avgRating != null)
+      .sort((a, b) => (b.matchSummary.avgRating ?? 0) - (a.matchSummary.avgRating ?? 0))
+      .slice(0, 5)
+      .map(({ name, matchSummary, ovr, position }) => ({
+        name,
+        avgRating: matchSummary.avgRating,
+        ovr,
+        position,
+      }));
+
+    const financeByCategory = financeAll.reduce<Record<string, { revenue: number; expense: number }>>(
+      (acc, entry) => {
+        const cat = entry.category || 'Autre';
+        if (!acc[cat]) acc[cat] = { revenue: 0, expense: 0 };
+        if (entry.type === 'REVENUE') acc[cat].revenue += entry.amount;
+        else acc[cat].expense += entry.amount;
+        return acc;
+      },
+      {},
+    );
+
+    return {
+      clubName: org?.clubName ?? 'Club',
+      league: org?.league ?? '—',
+      country: org?.country ?? '—',
+      season: String(new Date().getFullYear()),
+      profile: org?.profile
+        ? {
+            city: org.profile.city,
+            stadium: org.profile.stadium,
+            officialEmail: org.profile.officialEmail,
+            website: org.profile.website,
+          }
+        : null,
+      playersCount: stats?.playersCount ?? players.length,
+      staffCount: stats?.staffCount ?? staff.length,
+      injuredCount: stats?.injuredCount ?? injuries.length,
+      contractsToRenew: stats?.contractsToRenew ?? contractsExpiring.length,
+      budgetUsedPct: stats?.budgetUsedPct ?? (revenue > 0 ? Math.round((expenses / revenue) * 100) : 0),
+      budgetRemaining: stats?.budgetRemaining ?? Math.max(0, revenue - expenses),
+      revenue,
+      expenses,
+      rankings: {
+        topOvr: topByOvr.map(({ name, ovr, position, marketValue }) => ({
+          name,
+          ovr,
+          position,
+          marketValue,
+        })),
+        topMarketValue: topByValue,
+        topScorers,
+        topRated,
+      },
+      players: playersDetailed,
+      staff: staff.map((s) => ({
+        name: s.fullName,
+        role: s.role,
+        department: s.department,
+        salaryMonthly: s.salaryMonthly,
+        available: s.isAvailable,
+        contractEnd: s.contractEnd?.toISOString().slice(0, 10) ?? null,
+      })),
+      injuries: injuries.map((i) => ({
+        player: i.playerName,
+        type: i.injuryType,
+        bodyPart: i.bodyPart,
+        riskScore: i.riskScore,
+        returnDate: i.returnDate?.toISOString().slice(0, 10) ?? null,
+      })),
+      contracts: contracts.map((c) => ({
+        holder: c.holderName,
+        start: c.startDate.toISOString().slice(0, 10),
+        end: c.endDate.toISOString().slice(0, 10),
+        salaryMonthly: c.salaryMonthly,
+        bonus: c.bonus,
+        consumedPct: c.consumedPct,
+        expiringSoon: c.endDate.getTime() - Date.now() < 90 * 24 * 60 * 60 * 1000,
+      })),
+      contractsExpiring: contractsExpiring.map((c) => ({
+        holder: c.holderName,
+        end: c.endDate.toISOString().slice(0, 10),
+        salaryMonthly: c.salaryMonthly,
+      })),
+      calendar: events.map((e) => ({
+        title: e.title,
+        type: e.eventType,
+        date: e.eventDate.toISOString().slice(0, 10),
+        time: e.eventTime,
+        location: e.location,
+      })),
+      finance: {
+        totalRevenue: revenue,
+        totalExpenses: expenses,
+        budgetUsedPct: stats?.budgetUsedPct ?? (revenue > 0 ? Math.round((expenses / revenue) * 100) : 0),
+        byCategory: financeByCategory,
+        recentEntries: finance.slice(0, 20).map((f) => ({
+          label: f.label,
+          amount: f.amount,
+          type: f.type,
+          category: f.category,
+          date: f.entryDate.toISOString().slice(0, 10),
+        })),
+      },
+      sponsors: sponsors.map((s) => ({
+        name: s.nom,
+        amount: s.montant,
+        status: s.status,
+        sector: s.secteur,
+        endDate: s.endDate.toISOString().slice(0, 10),
+      })),
+      invoices: invoices.map((i) => ({
+        reference: i.reference,
+        supplier: i.fournisseur,
+        amount: i.montant,
+        status: i.status,
+        dueDate: i.dueDate?.toISOString().slice(0, 10) ?? null,
+      })),
+      infrastructures: infrastructures.map((inf) => ({
+        name: inf.name,
+        type: inf.infraType,
+        status: inf.status,
+        capacity: inf.capacity,
+        occupationPct: inf.occupationPct,
+      })),
+      transfers: transfers.map((t) => ({
+        player: t.playerName,
+        type: t.transferType,
+        club: t.club,
+        value: t.value,
+        status: t.status,
+        probability: t.probability,
+      })),
+      chemistry: chemistry.map((c) => ({
+        player1: c.player1Name,
+        player2: c.player2Name,
+        score: c.chemistry,
+      })),
+      prospects: prospects.map((p) => ({
+        name: p.fullName,
+        age: p.age,
+        position: p.position,
+        club: p.externalClub,
+        potential: p.potential,
+        score: p.score,
+        status: p.status,
+      })),
+      members: members.map((m) => ({
+        name: m.fullName,
+        role: m.clubRole,
+        status: m.status,
+      })),
+      trainingSessions: trainingSessions.map((t) => ({
+        title: t.title,
+        type: t.type,
+        date: t.date,
+        intensity: t.intensity,
+      })),
+      documentsCount: documents.length,
+      // Legacy string arrays for fallback helpers
+      playersLegacy: playersDetailed.map(
+        (p) =>
+          `${p.name} (${p.position}, OVR ${p.ovr}, valeur ${p.marketValue}, ${p.goals} buts, ${p.status})`,
+      ),
+      staffLegacy: staff.map((s) => `${s.fullName} — ${s.role}`),
+      injuriesLegacy: injuries.map(
+        (i) => `${i.playerName}: ${i.injuryType}${i.bodyPart ? ` (${i.bodyPart})` : ''} — risque ${i.riskScore}%`,
+      ),
+      contractsExpiringLegacy: contractsExpiring.map(
+        (c) => `${c.holderName} — fin ${c.endDate.toLocaleDateString('fr-FR')}`,
+      ),
+      upcomingEventsLegacy: events
+        .filter((e) => e.eventDate >= new Date())
+        .slice(0, 5)
+        .map((e) => `${e.title} (${e.eventType}) — ${e.eventDate.toLocaleDateString('fr-FR')}`),
+    };
+  }
+
+  private formatClubContextText(ctx: Awaited<ReturnType<ClubService['buildClubContext']>>) {
+    const snapshot = {
+      club: {
+        name: ctx.clubName,
+        league: ctx.league,
+        country: ctx.country,
+        season: ctx.season,
+        profile: ctx.profile,
+      },
+      summary: {
+        playersCount: ctx.playersCount,
+        staffCount: ctx.staffCount,
+        injuredCount: ctx.injuredCount,
+        contractsToRenew: ctx.contractsToRenew,
+        budgetUsedPct: ctx.budgetUsedPct,
+        budgetRemaining: ctx.budgetRemaining,
+        revenue: ctx.revenue,
+        expenses: ctx.expenses,
+      },
+      rankings: ctx.rankings,
+      players: ctx.players,
+      staff: ctx.staff,
+      injuries: ctx.injuries,
+      contracts: ctx.contracts,
+      calendar: ctx.calendar,
+      finance: ctx.finance,
+      sponsors: ctx.sponsors,
+      invoices: ctx.invoices,
+      infrastructures: ctx.infrastructures,
+      transfers: ctx.transfers,
+      chemistry: ctx.chemistry,
+      prospects: ctx.prospects,
+      members: ctx.members,
+      trainingSessions: ctx.trainingSessions,
+    };
+
+    return [
+      '=== SNAPSHOT BASE DE DONNÉES CLUB (ODIN ERP) ===',
+      'Utilise EXCLUSIVEMENT ces données pour répondre. Ne dis jamais que les données manquent si elles sont ci-dessous.',
+      'Pour "joueur le plus évalué": utilise rankings.topOvr ou rankings.topMarketValue ou OVR/marketValue des joueurs.',
+      JSON.stringify(snapshot),
+    ].join('\n');
+  }
+
+  private fallbackInsights(ctx: Awaited<ReturnType<ClubService['buildClubContext']>>) {
+    const insights: { text: string; severity: string }[] = [];
+    insights.push({
+      text:
+        ctx.playersCount === 0
+          ? 'Aucun joueur enregistré dans l\'effectif.'
+          : `${ctx.playersCount} joueur(s) dans l'effectif.`,
+      severity: 'info',
+    });
+    insights.push({
+      text:
+        ctx.staffCount === 0
+          ? 'Aucun membre du staff enregistré.'
+          : `${ctx.staffCount} membre(s) du staff.`,
+      severity: 'info',
+    });
+    if (ctx.injuredCount > 0) {
+      insights.push({
+        text: `${ctx.injuredCount} joueur(s) blessé(s) — suivi médical recommandé.`,
+        severity: 'warning',
+      });
+    }
+    if (ctx.contractsToRenew > 0) {
+      insights.push({
+        text: `${ctx.contractsToRenew} contrat(s) à renouveler sous 90 jours.`,
+        severity: 'warning',
+      });
+    }
+    if (ctx.budgetUsedPct > 90 && ctx.revenue > 0) {
+      insights.push({
+        text: `Budget utilisé à ${ctx.budgetUsedPct}% — vigilance financière.`,
+        severity: 'danger',
+      });
+    } else if (ctx.revenue === 0) {
+      insights.push({
+        text: 'Budget non configuré — ajoutez des entrées financières.',
+        severity: 'warning',
+      });
+    } else {
+      insights.push({
+        text: `Budget utilisé à ${ctx.budgetUsedPct}%.`,
+        severity: ctx.budgetUsedPct > 75 ? 'warning' : 'info',
+      });
+    }
+    return insights.slice(0, 4);
+  }
+
+  private buildSuggestedActions(ctx: Awaited<ReturnType<ClubService['buildClubContext']>>) {
+    const actions = [
+      { label: 'Voir calendrier', path: '/club/calendrier' },
+      { label: 'Gérer contrats', path: '/club/contrats' },
+      { label: 'Suivi médical', path: '/club/sante' },
+    ];
+    if (ctx.contractsToRenew > 0) {
+      return [actions[1], actions[2], actions[0]];
+    }
+    if (ctx.injuredCount > 0) {
+      return [actions[2], actions[0], actions[1]];
+    }
+    return actions;
+  }
+
+  async getClubAi(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const [config, ctx] = await Promise.all([
+      this.resolveAiConfig(),
+      this.buildClubContext(organizationId),
+    ]);
+
+    const hasKey = config.apiKey.length > 0;
+    const status = !config.enabled ? 'disabled' : hasKey ? 'available' : 'no_key';
+    const avgMs =
+      this.clubAiResponseTimesMs.length > 0
+        ? Math.round(
+            this.clubAiResponseTimesMs.reduce((a, b) => a + b, 0) /
+              this.clubAiResponseTimesMs.length,
+          )
+        : null;
+
+    let insights = this.fallbackInsights(ctx);
+    let summary = insights.map((i) => i.text).slice(0, 3);
+
+    if (status === 'available') {
+      try {
+        const raw = await this.callOpenAi(
+          config.apiKey,
+          config.model,
+          'Tu es l\'assistant IA d\'un club de football sur ODIN ERP. Réponds UNIQUEMENT en JSON valide, en français.',
+          `Analyse ce club et retourne JSON:
+{"insights":[{"text":"...","severity":"info|warning|danger"}],"summary":["ligne1","ligne2","ligne3"]}
+Maximum 4 insights pertinents et actionnables.
+Données club:
+${this.formatClubContextText(ctx)}`,
+          600,
+        );
+        const parsed = JSON.parse(raw.replace(/```json\n?|\n?```/g, '')) as {
+          insights?: { text: string; severity: string }[];
+          summary?: string[];
+        };
+        if (parsed.insights?.length) insights = parsed.insights.slice(0, 4);
+        if (parsed.summary?.length) summary = parsed.summary.slice(0, 3);
+      } catch {
+        // fallback insights already set
+      }
+    }
+
+    return {
+      status,
+      model: config.model,
+      provider: config.provider,
+      hasApiKey: hasKey,
+      clubName: ctx.clubName,
+      season: ctx.season,
+      insights,
+      summary,
+      suggestedActions: this.buildSuggestedActions(ctx),
+      suggestedQuestions: [
+        'Quel est l\'état de l\'effectif ?',
+        'Quel est le joueur le plus évalué de l\'équipe ?',
+        'Y a-t-il des contrats à renouveler ?',
+        'Résumé budget du club',
+      ],
+      avgResponseTime: avgMs != null ? `${(avgMs / 1000).toFixed(1)}s` : '—',
+      snapshot: {
+        playersCount: ctx.playersCount,
+        staffCount: ctx.staffCount,
+        injuredCount: ctx.injuredCount,
+        contractsToRenew: ctx.contractsToRenew,
+        budgetUsedPct: ctx.budgetUsedPct,
+      },
+    };
+  }
+
+  async chatClubAi(user: JwtPayload, dto: { question: string; context?: string }) {
+    const organizationId = this.orgId(user);
+    const config = await this.resolveAiConfig();
+
+    if (!config.enabled) {
+      throw new BadRequestException('Assistant IA désactivé sur la plateforme.');
+    }
+    if (!config.apiKey) {
+      throw new BadRequestException(
+        'Clé OpenAI manquante. Contactez l\'administrateur plateforme.',
+      );
+    }
+
+    const ctx = await this.buildClubContext(organizationId);
+    const contextText = this.formatClubContextText(ctx);
+    const started = Date.now();
+
+    const result = await this.callOpenAi(
+      config.apiKey,
+      config.model,
+      `Tu es l'assistant IA du club ${ctx.clubName} sur ODIN ERP (football tunisien).
+Tu as accès COMPLET au snapshot base de données du club ci-dessous.
+Règles:
+- Réponds UNIQUEMENT à partir des données fournies (joueurs, OVR, valeur marchande, stats matchs, contrats, finances, blessures, staff, etc.)
+- Ne dis JAMAIS que tu n'as pas accès aux données si elles sont dans le snapshot
+- Pour le joueur "le plus évalué": utilise OVR (overall) ou marketValue selon la question
+- Réponds en français, concis, avec noms et chiffres précis
+- Donne des recommandations actionnables quand pertinent`,
+      `SNAPSHOT BASE DE DONNÉES:
+${contextText}
+${dto.context ? `\nContexte additionnel: ${dto.context}` : ''}
+
+Question: ${dto.question}`,
+      1200,
+    );
+
+    return {
+      question: dto.question,
+      answer: result,
+      durationMs: Date.now() - started,
+      model: config.model,
+      clubName: ctx.clubName,
+    };
+  }
+
+  // ─── MATCHES ─────────────────────────
+
+  async getMatches(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const matches = await this.prisma.clubMatch.findMany({
+      where: { organizationId },
+      orderBy: { matchDate: 'desc' },
+    });
+
+    const now = new Date();
+    const past = matches
+      .filter((m) => new Date(m.matchDate) < now)
+      .map((m) => this.formatMatch(m));
+    const upcoming = matches
+      .filter((m) => new Date(m.matchDate) >= now)
+      .sort(
+        (a, b) =>
+          new Date(a.matchDate).getTime() - new Date(b.matchDate).getTime(),
+      )
+      .map((m) => this.formatMatch(m));
+
+    const nextMatch = upcoming[0] ?? null;
+    const daysToNext = nextMatch
+      ? Math.ceil(
+          (new Date(nextMatch.matchDateISO).getTime() - Date.now()) / 86400000,
+        )
+      : null;
+
+    return { past, upcoming, nextMatch, daysToNext };
+  }
+
+  private formatMatch(m: {
+    id: string;
+    opponent: string;
+    competition: string;
+    matchDate: Date;
+    homeAway: string;
+    goalsFor: number;
+    goalsAgainst: number;
+    result: string;
+    opponentFormation: string | null;
+    opponentStrengths: string | null;
+    opponentWeaknesses: string | null;
+    notes: string | null;
+    createdAt: Date;
+  }) {
+    return {
+      id: m.id,
+      opponent: m.opponent,
+      competition: m.competition,
+      matchDate: new Date(m.matchDate).toLocaleDateString('fr-FR', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+      }),
+      matchDateISO: m.matchDate,
+      homeAway: m.homeAway,
+      homeAwayLabel: m.homeAway === 'D' ? 'Domicile' : 'Extérieur',
+      goalsFor: m.goalsFor,
+      goalsAgainst: m.goalsAgainst,
+      score:
+        m.goalsFor !== null && m.goalsAgainst !== null
+          ? `${m.goalsFor} - ${m.goalsAgainst}`
+          : null,
+      result: m.result,
+      resultLabel:
+        m.result === 'V'
+          ? 'Victoire'
+          : m.result === 'N'
+            ? 'Nul'
+            : 'Défaite',
+      opponentFormation: m.opponentFormation ?? null,
+      opponentStrengths: m.opponentStrengths ?? null,
+      opponentWeaknesses: m.opponentWeaknesses ?? null,
+      notes: m.notes ?? null,
+      createdAt: m.createdAt,
+    };
+  }
+
+  async createMatch(user: JwtPayload, data: Record<string, unknown>) {
+    const organizationId = this.orgId(user);
+    const match = await this.prisma.clubMatch.create({
+      data: {
+        organizationId,
+        opponent: String(data.opponent ?? ''),
+        competition: String(data.competition ?? 'Ligue 1'),
+        matchDate: new Date(String(data.matchDate)),
+        homeAway: String(data.homeAway ?? 'D'),
+        goalsFor: data.goalsFor !== undefined ? Number(data.goalsFor) : 0,
+        goalsAgainst:
+          data.goalsAgainst !== undefined ? Number(data.goalsAgainst) : 0,
+        result: String(data.result ?? 'N'),
+        opponentFormation: data.opponentFormation
+          ? String(data.opponentFormation)
+          : null,
+        opponentStrengths: data.opponentStrengths
+          ? String(data.opponentStrengths)
+          : null,
+        opponentWeaknesses: data.opponentWeaknesses
+          ? String(data.opponentWeaknesses)
+          : null,
+        notes: data.notes ? String(data.notes) : null,
+      },
+    });
+    return this.formatMatch(match);
+  }
+
+  async updateMatch(
+    user: JwtPayload,
+    id: string,
+    data: Record<string, unknown>,
+  ) {
+    const organizationId = this.orgId(user);
+    const existing = await this.prisma.clubMatch.findFirst({
+      where: { id, organizationId },
+    });
+    if (!existing) throw new NotFoundException('Match introuvable.');
+
+    const updated = await this.prisma.clubMatch.update({
+      where: { id },
+      data: {
+        ...(data.opponent !== undefined
+          ? { opponent: String(data.opponent) }
+          : {}),
+        ...(data.competition !== undefined
+          ? { competition: String(data.competition) }
+          : {}),
+        ...(data.matchDate !== undefined
+          ? { matchDate: new Date(String(data.matchDate)) }
+          : {}),
+        ...(data.homeAway !== undefined
+          ? { homeAway: String(data.homeAway) }
+          : {}),
+        ...(data.goalsFor !== undefined
+          ? { goalsFor: Number(data.goalsFor) }
+          : {}),
+        ...(data.goalsAgainst !== undefined
+          ? { goalsAgainst: Number(data.goalsAgainst) }
+          : {}),
+        ...(data.result !== undefined
+          ? { result: String(data.result) }
+          : {}),
+        ...(data.opponentFormation !== undefined
+          ? {
+              opponentFormation: data.opponentFormation
+                ? String(data.opponentFormation)
+                : null,
+            }
+          : {}),
+        ...(data.opponentStrengths !== undefined
+          ? {
+              opponentStrengths: data.opponentStrengths
+                ? String(data.opponentStrengths)
+                : null,
+            }
+          : {}),
+        ...(data.opponentWeaknesses !== undefined
+          ? {
+              opponentWeaknesses: data.opponentWeaknesses
+                ? String(data.opponentWeaknesses)
+                : null,
+            }
+          : {}),
+        ...(data.notes !== undefined
+          ? { notes: data.notes ? String(data.notes) : null }
+          : {}),
+      },
+    });
+    return this.formatMatch(updated);
+  }
+
+  async deleteMatch(user: JwtPayload, id: string) {
+    const organizationId = this.orgId(user);
+    const existing = await this.prisma.clubMatch.findFirst({
+      where: { id, organizationId },
+    });
+    if (!existing) throw new NotFoundException('Match introuvable.');
+    await this.prisma.clubMatch.delete({ where: { id } });
+    return { message: 'Match supprimé.' };
+  }
+
+  // ─── STANDING ────────────────────────
+
+  async getStanding(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const standing = await this.prisma.clubStanding.findUnique({
+      where: { organizationId },
+    });
+
+    if (!standing) {
+      return {
+        exists: false,
+        competition: 'Ligue 1',
+        position: null,
+        points: null,
+        played: null,
+        won: null,
+        drawn: null,
+        lost: null,
+        goalsFor: null,
+        goalsAgainst: null,
+        goalDifference: null,
+        form: [],
+      };
+    }
+
+    return {
+      exists: true,
+      competition: standing.competition,
+      position: standing.position,
+      points: standing.points,
+      played: standing.played,
+      won: standing.won,
+      drawn: standing.drawn,
+      lost: standing.lost,
+      goalsFor: standing.goalsFor,
+      goalsAgainst: standing.goalsAgainst,
+      goalDifference: standing.goalsFor - standing.goalsAgainst,
+      form: standing.form ? standing.form.split(',').filter(Boolean) : [],
+    };
+  }
+
+  async updateStanding(user: JwtPayload, data: Record<string, unknown>) {
+    const organizationId = this.orgId(user);
+
+    const standing = await this.prisma.clubStanding.upsert({
+      where: { organizationId },
+      create: {
+        organizationId,
+        competition: String(data.competition ?? 'Ligue 1'),
+        position: Number(data.position ?? 1),
+        points: Number(data.points ?? 0),
+        played: Number(data.played ?? 0),
+        won: Number(data.won ?? 0),
+        drawn: Number(data.drawn ?? 0),
+        lost: Number(data.lost ?? 0),
+        goalsFor: Number(data.goalsFor ?? 0),
+        goalsAgainst: Number(data.goalsAgainst ?? 0),
+        form: String(data.form ?? ''),
+      },
+      update: {
+        ...(data.competition !== undefined
+          ? { competition: String(data.competition) }
+          : {}),
+        ...(data.position !== undefined
+          ? { position: Number(data.position) }
+          : {}),
+        ...(data.points !== undefined ? { points: Number(data.points) } : {}),
+        ...(data.played !== undefined
+          ? { played: Number(data.played) }
+          : {}),
+        ...(data.won !== undefined ? { won: Number(data.won) } : {}),
+        ...(data.drawn !== undefined ? { drawn: Number(data.drawn) } : {}),
+        ...(data.lost !== undefined ? { lost: Number(data.lost) } : {}),
+        ...(data.goalsFor !== undefined
+          ? { goalsFor: Number(data.goalsFor) }
+          : {}),
+        ...(data.goalsAgainst !== undefined
+          ? { goalsAgainst: Number(data.goalsAgainst) }
+          : {}),
+        ...(data.form !== undefined ? { form: String(data.form) } : {}),
+      },
+    });
+
+    return {
+      exists: true,
+      competition: standing.competition,
+      position: standing.position,
+      points: standing.points,
+      played: standing.played,
+      won: standing.won,
+      drawn: standing.drawn,
+      lost: standing.lost,
+      goalsFor: standing.goalsFor,
+      goalsAgainst: standing.goalsAgainst,
+      goalDifference: standing.goalsFor - standing.goalsAgainst,
+      form: standing.form ? standing.form.split(',').filter(Boolean) : [],
     };
   }
 }

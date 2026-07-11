@@ -9,7 +9,12 @@ import { PrismaModule } from './prisma/prisma.module';
 import { UsersModule } from './users/users.module';
 import { PlatformModule } from './platform/platform.module';
 import { AnalysteModule } from './analyste/analyste.module';
+import { ResponsableModule } from './responsable/responsable.module';
+import { JoueurModule } from './joueur/joueur.module';
+import { ScoutModule } from './scout/scout.module';
 import { RecruteurModule } from './recruteur/recruteur.module';
+import { MessagesModule } from './messages/messages.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -21,7 +26,12 @@ import { RecruteurModule } from './recruteur/recruteur.module';
     UsersModule,
     PlatformModule,
     AnalysteModule,
+    ResponsableModule,
+    JoueurModule,
+    ScoutModule,
     RecruteurModule,
+    MessagesModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
