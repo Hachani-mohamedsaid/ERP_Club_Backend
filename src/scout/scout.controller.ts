@@ -200,6 +200,16 @@ export class ScoutController {
     return this.scoutAgents.getContactDraft(user, agentId);
   }
 
+  @Get('profile')
+  getScoutProfile(@CurrentUser() user: JwtPayload) {
+    return this.scout.getScoutProfile(user);
+  }
+
+  @Patch('profile')
+  updateScoutProfile(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
+    return this.scout.updateScoutProfile(user, body);
+  }
+
   @Delete('agents/:agentId')
   removeAgent(@CurrentUser() user: JwtPayload, @Param('agentId') agentId: string) {
     return this.scoutAgents.removeAgent(user, agentId);

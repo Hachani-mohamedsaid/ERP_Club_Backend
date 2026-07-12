@@ -1322,4 +1322,147 @@ export class ScoutService {
       extra: event.extraData,
     };
   }
+
+  private defaultScoutPrefs() {
+    return {
+      specialization: 'Attaquants & Milieux offensifs',
+      regions: ['Europe', 'Afrique du Nord'] as string[],
+      positions: ['BU', 'MC', 'Ailier G'] as string[],
+      budgetMax: '25',
+      ageMin: '16',
+      ageMax: '25',
+      notifyNewProspect: true,
+      notifyShortlist: true,
+      notifyMissionReminder: true,
+      language: 'fr',
+    };
+  }
+
+  async getScoutProfile(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const [dbUser, org, prospects, watchlist, reports, missions] = await Promise.all([
+      this.prisma.user.findUnique({
+        where: { id: user.sub },
+        select: { id: true, fullName: true, email: true, phone: true, role: true },
+      }),
+      this.prisma.organization.findUnique({
+        where: { id: organizationId },
+        select: { clubName: true, country: true, league: true },
+      }),
+      this.prisma.recruitmentProspect.findMany({
+        where: { organizationId },
+        select: { id: true, status: true, scoutExtra: true },
+      }),
+      this.prisma.scoutWatchlist.count({ where: { organizationId } }),
+      this.prisma.scoutReport.findMany({
+        where: { organizationId },
+        select: { id: true, createdAt: true, decision: true },
+      }),
+      this.prisma.clubCalendarEvent.findMany({
+        where: { organizationId, eventType: 'SCOUT' },
+        select: { id: true, eventDate: true },
+      }),
+    ]);
+
+    const settings = await this.prisma.platformSettings.findUnique({ where: { id: 'default' } });
+    const extended = (settings?.extendedSettings ?? {}) as Record<string, unknown>;
+    const store = (extended.scoutProfiles ?? {}) as Record<string, Record<string, unknown>>;
+    const saved = store[user.sub] ?? {};
+    const prefs = { ...this.defaultScoutPrefs(), ...saved };
+
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const missionsThisMonth = missions.filter((m) => m.eventDate >= monthStart).length;
+    const reportsThisMonth = reports.filter((r) => r.createdAt >= monthStart).length;
+    const advanced = prospects.filter((p) => {
+      const ex = (p.scoutExtra ?? {}) as ScoutExtra;
+      const wf = typeof ex.workflow === 'string' ? ex.workflow : STATUS_TO_WORKFLOW[p.status];
+      return wf === 'validation' || wf === 'signature' || wf === 'done';
+    }).length;
+    const conversion =
+      prospects.length > 0 ? Math.round((advanced / prospects.length) * 100) : 0;
+
+    return {
+      fullName: dbUser?.fullName ?? user.fullName ?? 'Scout',
+      email: dbUser?.email ?? user.email ?? '',
+      phone: typeof saved.phone === 'string' ? saved.phone : dbUser?.phone ?? '',
+      clubName: org?.clubName ?? 'Club',
+      country: org?.country ?? '',
+      league: org?.league ?? '',
+      role: 'Scout',
+      specialization: String(prefs.specialization),
+      regions: Array.isArray(prefs.regions) ? (prefs.regions as string[]) : this.defaultScoutPrefs().regions,
+      positions: Array.isArray(prefs.positions)
+        ? (prefs.positions as string[])
+        : this.defaultScoutPrefs().positions,
+      budgetMax: String(prefs.budgetMax ?? '25'),
+      ageMin: String(prefs.ageMin ?? '16'),
+      ageMax: String(prefs.ageMax ?? '25'),
+      notifyNewProspect: prefs.notifyNewProspect !== false,
+      notifyShortlist: prefs.notifyShortlist !== false,
+      notifyMissionReminder: prefs.notifyMissionReminder !== false,
+      language: String(prefs.language ?? 'fr'),
+      stats: {
+        missionsThisMonth,
+        reportsSubmitted: reports.length,
+        reportsThisMonth,
+        prospectsFollowed: watchlist,
+        prospectsTotal: prospects.length,
+        conversionRate: conversion,
+      },
+      season: '2026-2027',
+    };
+  }
+
+  async updateScoutProfile(user: JwtPayload, body: Record<string, unknown>) {
+    const prefs = {
+      specialization: String(body.specialization ?? this.defaultScoutPrefs().specialization),
+      regions: Array.isArray(body.regions) ? body.regions.map(String) : this.defaultScoutPrefs().regions,
+      positions: Array.isArray(body.positions)
+        ? body.positions.map(String)
+        : this.defaultScoutPrefs().positions,
+      budgetMax: String(body.budgetMax ?? '25'),
+      ageMin: String(body.ageMin ?? '16'),
+      ageMax: String(body.ageMax ?? '25'),
+      notifyNewProspect: body.notifyNewProspect !== false,
+      notifyShortlist: body.notifyShortlist !== false,
+      notifyMissionReminder: body.notifyMissionReminder !== false,
+      language: String(body.language ?? 'fr'),
+      phone: body.phone !== undefined ? String(body.phone) : undefined,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (typeof body.fullName === 'string' && body.fullName.trim()) {
+      await this.prisma.user.update({
+        where: { id: user.sub },
+        data: {
+          fullName: body.fullName.trim(),
+          ...(prefs.phone !== undefined ? { phone: prefs.phone } : {}),
+        },
+      });
+    } else if (prefs.phone !== undefined) {
+      await this.prisma.user.update({
+        where: { id: user.sub },
+        data: { phone: prefs.phone },
+      });
+    }
+
+    const settings = await this.prisma.platformSettings.findUnique({ where: { id: 'default' } });
+    const extended = (settings?.extendedSettings ?? {}) as Record<string, unknown>;
+    const store = (extended.scoutProfiles ?? {}) as Record<string, Record<string, unknown>>;
+    store[user.sub] = { ...store[user.sub], ...prefs };
+
+    await this.prisma.platformSettings.upsert({
+      where: { id: 'default' },
+      create: {
+        id: 'default',
+        extendedSettings: { ...extended, scoutProfiles: store } as never,
+      },
+      update: {
+        extendedSettings: { ...extended, scoutProfiles: store } as never,
+      },
+    });
+
+    return this.getScoutProfile(user);
+  }
 }
