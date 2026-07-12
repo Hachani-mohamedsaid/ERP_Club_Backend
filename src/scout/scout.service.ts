@@ -1306,6 +1306,7 @@ export class ScoutService {
         extraData: {
           opponent: data.opponent ?? null,
           prospectName: data.prospectName ?? null,
+          prospectId: data.prospectId ?? null,
           matchType: data.matchType ?? 'live',
         } as Prisma.InputJsonValue,
       },
