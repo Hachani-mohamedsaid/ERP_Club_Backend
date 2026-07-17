@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } f
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { JwtPayload } from '../auth/jwt-payload.interface';
+import { ScoutFootballService } from './api-football/scout-football.service';
 import { ScoutService } from './scout.service';
 import { ScoutMapService } from './scout-map.service';
 import { ScoutAiService } from './scout-ai.service';
@@ -15,6 +16,7 @@ export class ScoutController {
     private readonly scoutMap: ScoutMapService,
     private readonly scoutAi: ScoutAiService,
     private readonly scoutAgents: ScoutAgentsService,
+    private readonly scoutFootball: ScoutFootballService,
   ) {}
 
   @Get('dashboard')
@@ -34,6 +36,21 @@ export class ScoutController {
   @Get('prospects')
   listProspects(@CurrentUser() user: JwtPayload) {
     return this.scout.listProspects(user);
+  }
+
+  @Get('prospects/live')
+  getProspectLive(
+    @Query('name') name: string,
+    @Query('club') club?: string,
+    @Query('legacyId') legacyId?: string,
+    @Query('apiSportsId') apiSportsId?: string,
+  ) {
+    return this.scoutFootball.getProspectLive({
+      name,
+      club,
+      legacyId,
+      apiSportsId: apiSportsId ? Number(apiSportsId) : undefined,
+    });
   }
 
   @Get('prospects/:id')

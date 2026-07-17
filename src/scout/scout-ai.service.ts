@@ -3,6 +3,7 @@ import { JwtPayload } from '../auth/jwt-payload.interface';
 import { ClubAccessService } from '../club/club-access.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScoutService } from './scout.service';
+import { ScoutFootballService } from './api-football/scout-football.service';
 import { TEAMS, COUNTRIES, CONTINENTS } from './data/scout-geo-catalog';
 import {
   getFlashscoreSearchPool,
@@ -22,6 +23,7 @@ export class ScoutAiService {
     private readonly prisma: PrismaService,
     private readonly scout: ScoutService,
     private readonly access: ClubAccessService,
+    private readonly scoutFootball: ScoutFootballService,
   ) {}
 
   private async resolveAiConfig() {
@@ -594,6 +596,14 @@ Règles:
       budgetRange?: string;
     },
   ) {
+    if (this.scoutFootball.isAvailable()) {
+      try {
+        return await this.scoutFootball.searchProspects(user, filters);
+      } catch {
+        /* quota ou erreur API → fallback Flashscore ci-dessous */
+      }
+    }
+
     const config = await this.resolveAiConfig();
     const allDb = await this.scout.listProspects(user);
     const pool = getFlashscoreSearchPool();

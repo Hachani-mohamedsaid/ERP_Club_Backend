@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { JwtPayload } from '../auth/jwt-payload.interface';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScoutService } from './scout.service';
+import { ScoutFootballService } from './api-football/scout-football.service';
 import {
   CONTINENTS,
   COUNTRIES,
@@ -49,6 +50,7 @@ export class ScoutMapService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly scout: ScoutService,
+    private readonly scoutFootball: ScoutFootballService,
   ) {}
 
   private async resolveAiConfig() {
@@ -252,6 +254,23 @@ Règles: liste COMPLÈTE (16-20 clubs), noms réels, saison 2024-25.`,
   }
 
   async getMapOverview(user: JwtPayload) {
+    if (this.scoutFootball.isAvailable()) {
+      try {
+        const live = await this.scoutFootball.getMapOverview();
+        const prospects = await this.scout.listProspects(user);
+        return {
+          ...live,
+          stats: { ...live.stats, prospectsInDb: prospects.length },
+          continents: live.continents.map((c) => ({
+            ...c,
+            prospects: this.countProspectsForContinent(prospects, c.id) || c.prospects,
+          })),
+        };
+      } catch {
+        /* fallback below */
+      }
+    }
+
     const [config, prospects] = await Promise.all([
       this.resolveAiConfig(),
       this.scout.listProspects(user),
@@ -286,6 +305,24 @@ Règles: liste COMPLÈTE (16-20 clubs), noms réels, saison 2024-25.`,
   }
 
   async getMapCountries(user: JwtPayload, continentId: string) {
+    if (this.scoutFootball.isAvailable()) {
+      try {
+        const live = await this.scoutFootball.getMapCountries(continentId);
+        if (live) {
+          const prospects = await this.scout.listProspects(user);
+          return {
+            ...live,
+            countries: live.countries.map((c) => ({
+              ...c,
+              prospects: this.countProspectsForCountry(prospects, c.id) || c.prospects,
+            })),
+          };
+        }
+      } catch {
+        /* fallback below */
+      }
+    }
+
     const continent = getContinent(continentId);
     if (!continent) throw new NotFoundException('Continent introuvable.');
 
@@ -304,6 +341,25 @@ Règles: liste COMPLÈTE (16-20 clubs), noms réels, saison 2024-25.`,
   }
 
   async getMapTeams(user: JwtPayload, countryId: string, refresh = false) {
+    if (this.scoutFootball.isAvailable()) {
+      try {
+        const live = await this.scoutFootball.getMapTeams(countryId);
+        if (live && live.teams.length > 0) {
+          const prospects = await this.scout.listProspects(user);
+          return {
+            ...live,
+            teams: live.teams.map((t) => ({
+              ...t,
+              dbProspects: this.countProspectsForTeam(prospects, t.name),
+            })),
+            total: live.totalTeams,
+          };
+        }
+      } catch {
+        /* fallback below */
+      }
+    }
+
     const country = getCountry(countryId);
     if (!country) throw new NotFoundException('Pays introuvable.');
 
@@ -499,6 +555,33 @@ Règles:
   }
 
   async getTeamSquad(user: JwtPayload, teamId: string, refresh = false) {
+    if (this.scoutFootball.isAvailable()) {
+      try {
+        const live = await this.scoutFootball.getTeamSquad(teamId, refresh);
+        if (live) {
+          const prospects = await this.scout.listProspects(user);
+          const dbProspects = prospects
+            .filter((p) => matchClubName(p.club, live.team.name))
+            .map((p) => this.mapProspectToSquadPlayer(p));
+          const players = this.mergeFlashscoreRoster(
+            live.players.map((p) => ({ ...p, source: 'flashscore' as const })),
+            dbProspects,
+          );
+          return {
+            ...live,
+            players,
+            sources: {
+              database: players.filter((p) => p.inDatabase).length,
+              flashscore: players.length,
+              ai: 0,
+            },
+          };
+        }
+      } catch {
+        /* fallback below */
+      }
+    }
+
     const team = await this.resolveTeam(teamId);
     if (!team) throw new NotFoundException('Équipe introuvable.');
     const country = getCountry(team.countryId);
