@@ -346,6 +346,7 @@ export class ScoutService {
     return {
       id: p.id,
       legacyId: typeof ex.legacyId === 'string' ? ex.legacyId : p.id,
+      apiSportsId: typeof ex.apiSportsId === 'number' ? ex.apiSportsId : undefined,
       name: p.fullName,
       age: p.age,
       nationality: p.nationality,
@@ -996,13 +997,36 @@ export class ScoutService {
 
     const existing = await this.findProspectByName(organizationId, fullName);
     if (existing) {
+      const currentExtra = this.extra(existing);
+      const apiSportsId = Number(data.apiSportsId ?? 0);
+      const incomingLegacyId = typeof data.legacyId === 'string' ? data.legacyId : undefined;
+      const shouldUpdateExtra =
+        (apiSportsId > 0 && typeof currentExtra.apiSportsId !== 'number') ||
+        (incomingLegacyId && typeof currentExtra.legacyId !== 'string') ||
+        (typeof data.photoUrl === 'string' && typeof currentExtra.photoUrl !== 'string');
+
+      const saved = shouldUpdateExtra
+        ? await this.prisma.recruitmentProspect.update({
+            where: { id: existing.id },
+            data: {
+              scoutExtra: {
+                ...currentExtra,
+                ...(apiSportsId > 0 ? { apiSportsId } : {}),
+                ...(incomingLegacyId ? { legacyId: incomingLegacyId } : {}),
+                ...(typeof data.photoUrl === 'string' ? { photoUrl: data.photoUrl } : {}),
+              } as Prisma.InputJsonValue,
+            },
+          })
+        : existing;
       const watch = await this.prisma.scoutWatchlist.findUnique({
-        where: { organizationId_prospectId: { organizationId, prospectId: existing.id } },
+        where: { organizationId_prospectId: { organizationId, prospectId: saved.id } },
       });
-      return this.formatProspect(existing, watch ?? undefined);
+      return this.formatProspect(saved, watch ?? undefined);
     }
 
     const scoutExtra: ScoutExtra = {
+      ...(typeof data.legacyId === 'string' ? { legacyId: data.legacyId } : {}),
+      ...(Number(data.apiSportsId ?? 0) > 0 ? { apiSportsId: Number(data.apiSportsId) } : {}),
       flag: data.flag ?? '🏳️',
       league: data.league ?? '—',
       workflow: 'new',
@@ -1025,6 +1049,7 @@ export class ScoutService {
       physical: Number(data.physical ?? 70),
       mental: Number(data.mental ?? 70),
       contractEnd: data.contractEnd ?? '2027-06',
+      ...(typeof data.photoUrl === 'string' ? { photoUrl: data.photoUrl } : {}),
     };
 
     const p = await this.prisma.recruitmentProspect.create({
