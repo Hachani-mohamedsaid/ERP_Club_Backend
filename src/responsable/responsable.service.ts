@@ -126,6 +126,43 @@ export class ResponsableService {
       status,
     );
 
+    // Feedback notif for club (scout/recruteur see via shared club feed when relevant)
+    if (row.sourceKind === 'committee' || row.type === 'RECRUTEMENT') {
+      const sourceKey = `validation-decision:${row.id}`;
+      await this.prisma.clubNotification.upsert({
+        where: { organizationId_sourceKey: { organizationId, sourceKey } },
+        create: {
+          organizationId,
+          title: `Décision comité — ${STATUS_LABEL[status]}`,
+          body: `${row.detail} · par ${user.fullName}`,
+          type: 'INFO',
+          level: status === 'VALIDE' ? 'SUCCESS' : status === 'REFUSE' ? 'WARNING' : 'INFO',
+          isRead: false,
+          sourceKey,
+          path: '/responsable/recrutement',
+          iconKey: 'validation',
+        },
+        update: {
+          title: `Décision comité — ${STATUS_LABEL[status]}`,
+          body: `${row.detail} · par ${user.fullName}`,
+          isRead: false,
+          level: status === 'VALIDE' ? 'SUCCESS' : status === 'REFUSE' ? 'WARNING' : 'INFO',
+        },
+      });
+
+      await this.prisma.recruteurNotification.create({
+        data: {
+          organizationId,
+          type: 'validation',
+          title: `Décision comité — ${STATUS_LABEL[status]}`,
+          body: `${row.detail} · par ${user.fullName}`,
+          priority: status === 'REFUSE' ? 'high' : 'medium',
+          isRead: false,
+          player: row.detail.split('—')[0]?.trim() || null,
+        },
+      });
+    }
+
     await this.audit.log(organizationId, {
       userName: user.fullName,
       userRole: 'Responsable',
@@ -291,6 +328,64 @@ export class ResponsableService {
       orderBy: { potential: 'desc' },
     });
     return prospects.map((p) => this.formatProspect(p));
+  }
+
+  /** Org-shared scout reports (jointure scout → responsable). */
+  async listRecruitmentReports(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const reports = await this.prisma.scoutReport.findMany({
+      where: { organizationId },
+      orderBy: { createdAt: 'desc' },
+    });
+    return reports.map((r) => ({
+      id: r.id,
+      prospectId: r.prospectId,
+      prospect: r.prospectName,
+      scout: r.scoutName,
+      date: r.createdAt.toLocaleDateString('fr-FR'),
+      decision: r.decision,
+      recommendation: r.recommendation,
+      rating: r.aiScore != null
+        ? Math.round(r.aiScore / 10)
+        : Math.round(
+            (r.technique + r.physique + r.mental + r.tactique + r.vitesse) / 50,
+          ),
+      aiScore: r.aiScore,
+      status: r.status,
+      strengths: r.strengths,
+      weaknesses: r.weaknesses,
+    }));
+  }
+
+  /** Shortlist / comité (prospects SHORTLISTE + pending committee validations). */
+  async listRecruitmentShortlist(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const [prospects, pending] = await Promise.all([
+      this.prisma.recruitmentProspect.findMany({
+        where: {
+          organizationId,
+          status: { in: ['SHORTLISTE', 'CONTACTE'] },
+        },
+        orderBy: { potential: 'desc' },
+      }),
+      this.prisma.validationRequest.findMany({
+        where: {
+          organizationId,
+          type: 'RECRUTEMENT',
+          status: 'EN_ATTENTE',
+          sourceKind: { in: ['committee', 'prospect'] },
+        },
+      }),
+    ]);
+    const pendingBySource = new Set(
+      pending.map((v) => v.sourceId).filter(Boolean) as string[],
+    );
+    return prospects.map((p) => ({
+      ...this.formatProspect(p),
+      pendingValidation: pendingBySource.has(p.id),
+      validationId: pending.find((v) => v.sourceId === p.id)?.id ?? null,
+      scoutName: p.scoutName,
+    }));
   }
 
   async createProspect(user: JwtPayload, data: Record<string, unknown>, ip?: string) {

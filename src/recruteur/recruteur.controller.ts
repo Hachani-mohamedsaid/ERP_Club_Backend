@@ -24,4 +24,14 @@ export class RecruteurController {
   generateReport(@CurrentUser() user: JwtPayload, @Body() dto: RecruteurAiReportDto) {
     return this.recruteur.generateReport(user, dto.templateId, dto.format);
   }
+
+  @Get('shortlist')
+  listShortlist(@CurrentUser() user: JwtPayload) {
+    return this.recruteur.listShortlist(user);
+  }
+
+  @Get('validation')
+  listValidation(@CurrentUser() user: JwtPayload) {
+    return this.recruteur.listValidation(user);
+  }
 }

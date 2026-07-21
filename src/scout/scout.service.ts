@@ -14,6 +14,7 @@ import { normPlayerName } from './data/player-primary-club';
 import { CalendarEventType, Prisma, RecruitmentStatus } from '@prisma/client';
 import { JwtPayload } from '../auth/jwt-payload.interface';
 import { ClubAccessService } from '../club/club-access.service';
+import { ValidationRequestService } from '../club/validation-request.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 type ScoutExtra = Record<string, unknown>;
@@ -270,6 +271,7 @@ export class ScoutService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly access: ClubAccessService,
+    private readonly validationRequests: ValidationRequestService,
   ) {}
 
   private orgId(user: JwtPayload) {
@@ -1291,9 +1293,106 @@ export class ScoutService {
       };
       const workflow = workflowMap[String(data.decision)] ?? 'analysis';
       await this.updateProspect(user, String(data.prospectId), { workflow });
+
+      const decision = String(data.decision);
+      if (decision === 'shortlist' || decision === 'recruit') {
+        await this.submitCommittee(user, [String(data.prospectId)], {
+          title: decision === 'recruit' ? 'Recrutement recommandé' : 'Shortlist comité',
+          fromReport: true,
+        });
+      }
     }
 
     return { id: report.id, ok: true };
+  }
+
+  /**
+   * Scout → comité recrutement (Responsable + Recruteur).
+   * Creates ValidationRequest + ClubNotification + RecruteurNotification per prospect.
+   */
+  async submitCommittee(
+    user: JwtPayload,
+    prospectIds: string[],
+    opts?: { title?: string; fromReport?: boolean },
+  ) {
+    const organizationId = this.orgId(user);
+    const ids = [...new Set((prospectIds ?? []).map(String).filter(Boolean))];
+    if (!ids.length) throw new BadRequestException('Aucun prospect sélectionné.');
+
+    const prospects = await this.prisma.recruitmentProspect.findMany({
+      where: { organizationId, id: { in: ids } },
+    });
+    if (!prospects.length) throw new NotFoundException('Prospects introuvables.');
+
+    const submitted: { prospectId: string; name: string; validationId: string | null }[] = [];
+
+    for (const p of prospects) {
+      await this.prisma.recruitmentProspect.update({
+        where: { id: p.id },
+        data: { status: 'SHORTLISTE' },
+      });
+
+      const title = opts?.title ?? 'Shortlist comité';
+      const detail = `${p.fullName} — ${p.position} · ${p.externalClub}`;
+      const validation = await this.validationRequests.create(user, {
+        type: 'RECRUTEMENT',
+        title,
+        detail,
+        priority: p.potential >= 85 ? 'HAUTE' : 'NORMALE',
+        sourceKind: 'committee',
+        sourceId: p.id,
+      });
+
+      const sourceKey = `committee:${p.id}`;
+      await this.prisma.clubNotification.upsert({
+        where: {
+          organizationId_sourceKey: { organizationId, sourceKey },
+        },
+        create: {
+          organizationId,
+          title: `${title} — ${p.fullName}`,
+          body: `${user.fullName} (Scout) a soumis ${detail} pour validation.`,
+          type: 'INFO',
+          level: p.potential >= 85 ? 'WARNING' : 'INFO',
+          isRead: false,
+          sourceKey,
+          path: '/responsable/validation',
+          iconKey: 'validation',
+        },
+        update: {
+          title: `${title} — ${p.fullName}`,
+          body: `${user.fullName} (Scout) a soumis ${detail} pour validation.`,
+          isRead: false,
+          level: p.potential >= 85 ? 'WARNING' : 'INFO',
+          path: '/responsable/validation',
+        },
+      });
+
+      await this.prisma.recruteurNotification.create({
+        data: {
+          organizationId,
+          type: 'shortlist',
+          title: `${title} — ${p.fullName}`,
+          body: `Soumis par ${user.fullName} · ${detail}`,
+          priority: p.potential >= 85 ? 'high' : 'medium',
+          isRead: false,
+          player: p.fullName,
+        },
+      });
+
+      submitted.push({
+        prospectId: p.id,
+        name: p.fullName,
+        validationId: validation?.id ?? null,
+      });
+    }
+
+    return {
+      ok: true,
+      count: submitted.length,
+      submitted,
+      message: `${submitted.length} profil(s) envoyé(s) au comité recrutement`,
+    };
   }
 
   async listMissions(user: JwtPayload) {

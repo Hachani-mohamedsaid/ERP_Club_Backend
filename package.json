@@ -18,6 +18,8 @@
     "prisma:push": "prisma db push --accept-data-loss",
     "db:migrate:safe": "prisma db execute --file prisma/migrations/add-responsable-joueur.sql --schema prisma/schema.prisma",
     "db:setup": "prisma generate && npm run db:bootstrap",
+    "seed:mu": "npx ts-node scripts/seed-manchester-united-demo.ts",
+    "seed:mu:api": "node scripts/seed-manchester-united-via-api.mjs",
     "prisma:studio": "prisma studio",
     "render:build": "prisma generate && nest build",
     "db:scout": "prisma db execute --file prisma/migrations/add-scout-tables.sql --schema prisma/schema.prisma",

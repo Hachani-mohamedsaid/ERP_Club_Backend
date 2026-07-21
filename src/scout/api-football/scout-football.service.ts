@@ -462,6 +462,7 @@ export class ScoutFootballService {
       heatmapZones: this.buildHeatmapZones(position, goals, assists),
       monthlyPotential: this.buildMonthlyPotential(potential, matchHistory),
       videos: this.buildVideos(name, stat.team.name, goals, seasonLabel),
+      reels: this.buildAiReels(name, stat.team.name, position, goals, assists),
     };
   }
 
@@ -518,6 +519,7 @@ export class ScoutFootballService {
       heatmapZones: this.buildHeatmapZones(position, stats.goals, stats.assists),
       monthlyPotential: this.buildMonthlyPotential(hit.potential, matchHistory),
       videos: this.buildVideos(hit.name, hit.club, stats.goals, SCOUT_SEASON),
+      reels: this.buildAiReels(hit.name, hit.club, position, stats.goals, stats.assists),
     };
   }
 
@@ -925,5 +927,95 @@ export class ScoutFootballService {
       { title: `Technique & dribbles — ${name}`, duration: '2:18', type: 'Technique', icon: '🎯' },
       { title: `Saison ${season} — ${goals} buts · ${club}`, duration: '4:42', type: 'Saison', icon: '📊' },
     ];
+  }
+
+  private buildAiReels(
+    name: string,
+    club: string,
+    position: string,
+    goals: number,
+    assists: number,
+  ) {
+    const sn = name.trim().split(/\s+/).pop() ?? name;
+    const isStriker = position === 'BU';
+    const isWinger = position === 'Ailier G' || position === 'Ailier D' || position === 'AG' || position === 'AD';
+    const isMid = position === 'MC' || position === 'MOC' || position === 'MDC';
+    const yt = (q: string) =>
+      `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}&sp=EgIYAQ%253D%253D`;
+
+    type ReelSeed = {
+      title: string;
+      caption: string;
+      duration: string;
+      views: string;
+      tag: string;
+      accent: string;
+    };
+
+    const ideas: ReelSeed[] = [];
+    if (goals >= 5) {
+      ideas.push({
+        title: `${sn} — ${goals} buts`,
+        caption: `Compilation buts · ${club}`,
+        duration: '0:58',
+        views: `${(1.1 + goals * 0.08).toFixed(1)}M`,
+        tag: 'Buts',
+        accent: '#22C55E',
+      });
+    }
+    ideas.push({
+      title: isStriker ? `${sn} — finition clinique` : `${sn} — meilleures actions`,
+      caption: isStriker ? 'Tirs, appels, finitions' : 'Actions décisives',
+      duration: '0:42',
+      views: '890K',
+      tag: 'Highlights',
+      accent: '#FF7A00',
+    });
+    if (isWinger || isStriker) {
+      ideas.push({
+        title: `${sn} — vitesse & dribbles`,
+        caption: 'Accélérations en contre',
+        duration: '0:36',
+        views: '1.4M',
+        tag: 'Vitesse',
+        accent: '#3B82F6',
+      });
+    }
+    if (assists >= 3 || isMid) {
+      ideas.push({
+        title: `${sn} — passes décisives`,
+        caption: `${assists} assists · vision de jeu`,
+        duration: '0:48',
+        views: '620K',
+        tag: 'Passes',
+        accent: '#8B5CF6',
+      });
+    }
+    ideas.push({
+      title: `${sn} vs top clubs`,
+      caption: `Performances ${club}`,
+      duration: '0:52',
+      views: '2.1M',
+      tag: 'Matchs',
+      accent: '#F59E0B',
+    });
+    ideas.push({
+      title: `Skills ${sn}`,
+      caption: 'Contrôle, feintes, technique',
+      duration: '0:33',
+      views: '1.8M',
+      tag: 'Skills',
+      accent: '#EC4899',
+    });
+
+    return ideas.slice(0, 6).map((reel, i) => {
+      const query = `${name} ${club} ${reel.tag} football highlights shorts`;
+      return {
+        ...reel,
+        id: `reel-${i}`,
+        query,
+        searchUrl: yt(query),
+      };
+    });
   }
 }

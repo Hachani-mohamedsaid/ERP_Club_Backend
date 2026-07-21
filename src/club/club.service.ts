@@ -508,6 +508,7 @@ export class ClubService {
     level: NotifLevel;
     isRead: boolean;
     createdAt: Date;
+    path?: string | null;
   }) {
     const typeMap: Record<NotifType, string> = {
       CONTRATS: 'Contrats',
@@ -530,6 +531,7 @@ export class ClubService {
       level: levelMap[n.level],
       date: n.createdAt.toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }),
       read: n.isRead,
+      path: n.path ?? null,
     };
   }
 

@@ -412,4 +412,71 @@ Règles:
       generatedAt: new Date().toISOString(),
     };
   }
+
+  /** Org shortlist partagée (scout → comité). */
+  async listShortlist(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const [prospects, pending] = await Promise.all([
+      this.prisma.recruitmentProspect.findMany({
+        where: {
+          organizationId,
+          status: { in: ['SHORTLISTE', 'CONTACTE'] },
+        },
+        orderBy: { potential: 'desc' },
+      }),
+      this.prisma.validationRequest.findMany({
+        where: {
+          organizationId,
+          type: 'RECRUTEMENT',
+          status: 'EN_ATTENTE',
+          sourceKind: { in: ['committee', 'prospect'] },
+        },
+      }),
+    ]);
+    const pendingIds = new Set(pending.map((v) => v.sourceId).filter(Boolean) as string[]);
+
+    return prospects.map((p) => ({
+      id: p.id,
+      name: p.fullName,
+      age: p.age,
+      position: p.position,
+      club: p.externalClub,
+      nationality: p.nationality,
+      potential: p.potential,
+      score: p.score,
+      status: p.status,
+      scoutName: p.scoutName,
+      pendingValidation: pendingIds.has(p.id),
+      notes: p.notes,
+    }));
+  }
+
+  /** Demandes recrutement flat (lecture recruteur). */
+  async listValidation(user: JwtPayload) {
+    const organizationId = this.orgId(user);
+    const items = await this.prisma.validationRequest.findMany({
+      where: { organizationId, type: 'RECRUTEMENT' },
+      orderBy: { createdAt: 'desc' },
+    });
+    const STATUS: Record<string, string> = {
+      EN_ATTENTE: 'En attente',
+      VALIDE: 'Validé',
+      REFUSE: 'Refusé',
+      RETOUR: 'Retour',
+    };
+    return items.map((r) => ({
+      id: r.id,
+      title: r.title,
+      detail: r.detail,
+      status: r.status,
+      statusLabel: STATUS[r.status] ?? r.status,
+      priority: r.priority,
+      requestedBy: r.requestedBy,
+      sourceKind: r.sourceKind,
+      sourceId: r.sourceId,
+      comment: r.comment,
+      createdAt: r.createdAt.toISOString(),
+      decidedAt: r.decidedAt?.toISOString() ?? null,
+    }));
+  }
 }

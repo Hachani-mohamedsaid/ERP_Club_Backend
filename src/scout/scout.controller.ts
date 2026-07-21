@@ -7,6 +7,7 @@ import { ScoutService } from './scout.service';
 import { ScoutMapService } from './scout-map.service';
 import { ScoutAiService } from './scout-ai.service';
 import { ScoutAgentsService } from './scout-agents.service';
+import { resolveYoutubeVideo } from './api-football/youtube-resolve';
 
 @Controller('scout')
 @UseGuards(JwtAuthGuard)
@@ -18,6 +19,11 @@ export class ScoutController {
     private readonly scoutAgents: ScoutAgentsService,
     private readonly scoutFootball: ScoutFootballService,
   ) {}
+
+  @Get('youtube/resolve')
+  resolveYoutube(@Query('q') q?: string) {
+    return resolveYoutubeVideo(String(q ?? '').trim());
+  }
 
   @Get('dashboard')
   async getDashboard(@CurrentUser() user: JwtPayload) {
@@ -125,6 +131,14 @@ export class ScoutController {
   @Post('reports')
   createReport(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
     return this.scout.createReport(user, body);
+  }
+
+  @Post('shortlist/submit-committee')
+  submitCommittee(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { prospectIds?: string[] },
+  ) {
+    return this.scout.submitCommittee(user, body.prospectIds ?? []);
   }
 
   @Get('missions')

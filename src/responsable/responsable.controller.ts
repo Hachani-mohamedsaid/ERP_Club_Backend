@@ -53,6 +53,16 @@ export class ResponsableController {
     return this.responsable.listProspects(user);
   }
 
+  @Get('recruitment/reports')
+  listRecruitmentReports(@CurrentUser() user: JwtPayload) {
+    return this.responsable.listRecruitmentReports(user);
+  }
+
+  @Get('recruitment/shortlist')
+  listRecruitmentShortlist(@CurrentUser() user: JwtPayload) {
+    return this.responsable.listRecruitmentShortlist(user);
+  }
+
   @Post('recruitment/prospects')
   createProspect(
     @CurrentUser() user: JwtPayload,

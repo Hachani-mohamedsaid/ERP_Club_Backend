@@ -66,17 +66,11 @@ export class ValidationRequestService {
   }
 
   async syncPendingSources(organizationId: string) {
-    const [expenses, prospects] = await Promise.all([
-      this.prisma.expenseRequest.findMany({
-        where: { organizationId, status: 'EN_ATTENTE' },
-      }),
-      this.prisma.recruitmentProspect.findMany({
-        where: {
-          organizationId,
-          status: { in: ['NON_TRAITE', 'EN_OBSERVATION'] },
-        },
-      }),
-    ]);
+    // Only sync finance expense requests. Recruitment validations are created
+    // explicitly (scout committee submit / report recommend) — not for every prospect.
+    const expenses = await this.prisma.expenseRequest.findMany({
+      where: { organizationId, status: 'EN_ATTENTE' },
+    });
 
     for (const expense of expenses) {
       const exists = await this.prisma.validationRequest.findFirst({
@@ -103,34 +97,6 @@ export class ValidationRequestService {
         });
       }
     }
-
-    for (const prospect of prospects) {
-      const exists = await this.prisma.validationRequest.findFirst({
-        where: {
-          organizationId,
-          sourceKind: 'prospect',
-          sourceId: prospect.id,
-        },
-      });
-      if (!exists) {
-        const scoutLabel = prospect.scoutName
-          ? `${prospect.scoutName} (Scout)`
-          : 'Recrutement';
-        await this.prisma.validationRequest.create({
-          data: {
-            organizationId,
-            type: 'RECRUTEMENT',
-            title: 'Recrutement joueur',
-            detail: `${prospect.fullName} — ${prospect.position} · ${prospect.externalClub}`,
-            priority: prospect.potential >= 85 ? 'HAUTE' : 'NORMALE',
-            status: 'EN_ATTENTE',
-            requestedBy: scoutLabel,
-            sourceKind: 'prospect',
-            sourceId: prospect.id,
-          },
-        });
-      }
-    }
   }
 
   async applyDecision(
@@ -141,11 +107,12 @@ export class ValidationRequestService {
   ) {
     if (!sourceKind || !sourceId) return;
 
-    if (sourceKind === 'prospect') {
+    if (sourceKind === 'prospect' || sourceKind === 'committee') {
       if (status === 'VALIDE') {
         await this.prisma.recruitmentProspect.updateMany({
           where: { id: sourceId, organizationId },
-          data: { status: 'SHORTLISTE' },
+          // Committee green-light → contact phase; plain prospect approve → shortlist
+          data: { status: sourceKind === 'committee' ? 'CONTACTE' : 'SHORTLISTE' },
         });
       } else if (status === 'REFUSE') {
         await this.prisma.recruitmentProspect.updateMany({
